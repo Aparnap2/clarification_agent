@@ -1,6 +1,7 @@
 from typing import Dict, Any
 from clarification_agent.nodes.base_node import BaseNodeHandler
 from clarification_agent.models.project import Project
+from clarification_agent.utils.llm_helper import LLMHelper
 
 class FileMapBuilderNode(BaseNodeHandler):
     """
@@ -44,42 +45,25 @@ class FileMapBuilderNode(BaseNodeHandler):
                     project.file_map[file_path] = description
     
     def _generate_suggested_structure(self, project: Project) -> str:
-        """Generate a suggested file structure based on the tech stack"""
-        structure = "# Suggested structure (edit as needed):\\n"
+        """Generate a suggested file structure based on the tech stack using AI"""
+        structure = "# AI-suggested structure (edit as needed):\\n"
         
-        # Detect frontend framework
-        frontend = next((tech for tech in project.tech_stack if tech in 
-                        ["React", "Vue", "Angular", "Next.js", "Svelte"]), None)
+        # Use AI to generate file structure
+        llm_helper = LLMHelper()
+        ai_structure = llm_helper.generate_file_structure(project.dict())
         
-        # Detect backend framework
-        backend = next((tech for tech in project.tech_stack if tech in 
-                       ["Node.js", "Python/Flask", "Python/FastAPI", "Python/Django", "Java/Spring", "Go", "Ruby on Rails"]), None)
+        # Convert AI structure to the expected format
+        for file_path, description in ai_structure.items():
+            structure += f"{file_path}: {description}\\n"
         
-        if frontend == "React":
-            structure += "src/components/App.jsx: Main application component\\n"
-            structure += "src/components/Header.jsx: Header component\\n"
-            structure += "src/pages/Home.jsx: Home page\\n"
-            structure += "src/styles/main.css: Main stylesheet\\n"
-        elif frontend == "Next.js":
-            structure += "pages/index.js: Home page\\n"
-            structure += "pages/api/hello.js: Example API route\\n"
-            structure += "components/Layout.js: Layout component\\n"
-            structure += "styles/globals.css: Global styles\\n"
+        # Add common files if AI didn't provide them
+        if not any("README.md" in path for path in ai_structure.keys()):
+            structure += "README.md: Project documentation\\n"
         
-        if backend == "Python/Flask":
-            structure += "app.py: Main Flask application\\n"
-            structure += "routes/api.py: API routes\\n"
-            structure += "models/user.py: User model\\n"
-            structure += "templates/index.html: Main template\\n"
-        elif backend == "Python/FastAPI":
-            structure += "main.py: FastAPI application\\n"
-            structure += "routers/api.py: API routes\\n"
-            structure += "models/models.py: Pydantic models\\n"
-            structure += "database/db.py: Database connection\\n"
-        
-        # Add common files
-        structure += "README.md: Project documentation\\n"
-        structure += "requirements.txt: Python dependencies\\n" if "Python" in str(project.tech_stack) else ""
-        structure += "package.json: Node.js dependencies\\n" if any(js_tech in str(project.tech_stack) for js_tech in ["React", "Vue", "Angular", "Next.js", "Node.js"]) else ""
+        if "Python" in str(project.tech_stack) and not any("requirements.txt" in path for path in ai_structure.keys()):
+            structure += "requirements.txt: Python dependencies\\n"
+            
+        if any(js_tech in str(project.tech_stack) for js_tech in ["React", "Vue", "Angular", "Next.js", "Node.js"]) and not any("package.json" in path for path in ai_structure.keys()):
+            structure += "package.json: Node.js dependencies\\n"
         
         return structure

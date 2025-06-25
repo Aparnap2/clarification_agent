@@ -1,6 +1,7 @@
 from typing import Dict, Any
 from clarification_agent.nodes.base_node import BaseNodeHandler
 from clarification_agent.models.project import Project
+from clarification_agent.utils.llm_helper import LLMHelper
 
 class StackSelectorNode(BaseNodeHandler):
     """
@@ -15,9 +16,19 @@ class StackSelectorNode(BaseNodeHandler):
         database_options = ["PostgreSQL", "MySQL", "MongoDB", "SQLite", "Firebase", "DynamoDB", "Supabase", "Other"]
         ai_options = ["OpenAI API", "Hugging Face", "LangChain", "LangGraph", "TensorFlow", "PyTorch", "Other"]
         
+        # Generate AI recommendations for tech stack
+        ai_suggestions = ""
+        if project.mvp_features and not project.tech_stack:
+            llm_helper = LLMHelper()
+            suggestion = llm_helper.generate_suggestions(
+                "Based on these MVP features, recommend a suitable technology stack (frontend, backend, database, and any AI/ML tools if needed):",
+                {"mvp_features": project.mvp_features, "description": project.description}
+            )
+            ai_suggestions = f"\n\nAI-Recommended Tech Stack:\n{suggestion}"
+        
         return {
             "title": "Technology Stack Selection",
-            "description": "Select the technologies you plan to use for this project.",
+            "description": f"Select the technologies you plan to use for this project.{ai_suggestions}",
             "questions": [
                 {
                     "id": "frontend",

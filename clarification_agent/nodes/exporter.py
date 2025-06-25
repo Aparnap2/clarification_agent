@@ -1,6 +1,7 @@
 from typing import Dict, Any
 from clarification_agent.nodes.base_node import BaseNodeHandler
 from clarification_agent.models.project import Project
+from clarification_agent.output.exporter import Exporter
 
 class ExporterNode(BaseNodeHandler):
     """
@@ -17,4 +18,6 @@ class ExporterNode(BaseNodeHandler):
     
     def process_responses(self, project: Project, responses: Dict[str, Any]) -> None:
         """Process responses for the Exporter node"""
-        # Nothing to process here, exporting is handled by the agent manager
+        # Export all files
+        exporter = Exporter(project)
+        exporter.export_all()

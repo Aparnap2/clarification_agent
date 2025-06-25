@@ -1,6 +1,7 @@
 from typing import Dict, Any
 from clarification_agent.nodes.base_node import BaseNodeHandler
 from clarification_agent.models.project import Project
+from clarification_agent.utils.llm_helper import LLMHelper
 
 class ClarifyIntentNode(BaseNodeHandler):
     """
@@ -9,9 +10,19 @@ class ClarifyIntentNode(BaseNodeHandler):
     
     def get_ui_data(self, project: Project) -> Dict[str, Any]:
         """Get UI data for the ClarifyIntent node"""
+        # Generate AI suggestions if we have some initial description
+        ai_suggestions = ""
+        if project.description and not project.goals:
+            llm_helper = LLMHelper()
+            suggestion = llm_helper.generate_suggestions(
+                "Based on this project description, suggest 3-5 clear project goals:",
+                {"description": project.description}
+            )
+            ai_suggestions = f"\n\nAI Suggestions:\n{suggestion}"
+        
         return {
             "title": "Clarify Project Intent",
-            "description": "Let's understand what this project is about.",
+            "description": f"Let's understand what this project is about.{ai_suggestions}",
             "questions": [
                 {
                     "id": "description",

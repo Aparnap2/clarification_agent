@@ -1,6 +1,7 @@
 from typing import Dict, Any
 from clarification_agent.nodes.base_node import BaseNodeHandler
 from clarification_agent.models.project import Project
+from clarification_agent.utils.llm_helper import LLMHelper
 
 class TaskPlannerNode(BaseNodeHandler):
     """
@@ -59,29 +60,26 @@ class TaskPlannerNode(BaseNodeHandler):
                     })
     
     def _generate_suggested_tasks(self, project: Project) -> str:
-        """Generate suggested tasks based on features and file map"""
-        tasks = "# Suggested tasks (edit as needed):\\n"
+        """Generate suggested tasks based on features and file map using AI"""
+        tasks = "# AI-suggested tasks (edit as needed):\\n"
         
-        # Add setup tasks
-        tasks += "Project setup: README.md: 0.5h: 1\\n"
-        tasks += "Create project structure: : 1h: 1\\n"
+        # Use AI to generate tasks
+        llm_helper = LLMHelper()
+        ai_tasks = llm_helper.generate_tasks(project.dict())
         
-        # Add tasks for each feature
-        for i, feature in enumerate(project.mvp_features):
-            # Find related files
-            related_files = []
-            for file_path, description in project.file_map.items():
-                if any(word.lower() in description.lower() for word in feature.lower().split()):
-                    related_files.append(file_path)
+        # Convert AI tasks to the expected format
+        for task in ai_tasks:
+            title = task.get("title", "")
+            file_path = task.get("file", "")
+            estimate = task.get("estimate", "1h")
+            priority = task.get("priority", 3)
             
-            if related_files:
-                for file_path in related_files:
-                    tasks += f"Implement {feature}: {file_path}: 2h: {i+2}\\n"
-            else:
-                tasks += f"Implement {feature}: : 2h: {i+2}\\n"
+            tasks += f"{title}: {file_path}: {estimate}: {priority}\\n"
         
-        # Add testing tasks
-        tasks += "Write tests: : 3h: 4\\n"
-        tasks += "Documentation: README.md: 1h: 5\\n"
+        # Add basic tasks if AI didn't provide enough
+        if len(ai_tasks) < 3:
+            tasks += "Project setup: README.md: 0.5h: 1\\n"
+            tasks += "Create project structure: : 1h: 1\\n"
+            tasks += "Documentation: README.md: 1h: 5\\n"
         
         return tasks

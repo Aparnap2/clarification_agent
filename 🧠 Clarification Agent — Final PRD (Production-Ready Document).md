@@ -246,7 +246,7 @@ windsurf generate scaffold --from .plan.yml
 | **Agent Framework**           | `LangGraph`                         | Graph-based modular decision engine for clarifier flow       |
 | **Agent Roles**               | `CrewAI`                            | Define Clarifier, Validator, Reasoner, Reflector, Planner    |
 | **Data Models**               | `Pydantic`                          | Structuring goals, plans, features, constraints              |
-| **Embedding / LLMs**          | `OpenRouter` (`Gemini`, `Claude`)   | Language modeling, reasoning, clarifying                     |
+| **Embedding / LLMs**          | `OpenRouter` (`deepseek/deepseek-chat-v3-0324:free`)   | Language modeling, reasoning, clarifying                     |
 | **Web Crawler Tool**          | `Crawl4AI`                          | Hallucination detection via validation against real-world docs |
 | **Vector Memory**             | `Graphiti` + `Neo4j`                | Store and visualize decision-memory as a queryable graph     |
 | **Filesystem Output**         | `.clarity/*.json`, `.plan.yml`      | Agent output spec; used by downstream tools (`mcp`, Windsurf) |

@@ -1,6 +1,7 @@
 from typing import Dict, Any
 from clarification_agent.nodes.base_node import BaseNodeHandler
 from clarification_agent.models.project import Project
+from clarification_agent.utils.llm_helper import LLMHelper
 
 class ReasonerNode(BaseNodeHandler):
     """
@@ -12,7 +13,23 @@ class ReasonerNode(BaseNodeHandler):
         # Create questions for each technology in the stack
         questions = []
         
+        # Generate AI suggestions for technology reasoning
+        llm_helper = LLMHelper()
+        ai_suggestions = ""
+        
         for i, tech in enumerate(project.tech_stack):
+            # Get AI-suggested reasoning if not already provided
+            suggested_reason = ""
+            if not project.decisions.get(tech):
+                suggested_reason = llm_helper.generate_suggestions(
+                    f"Explain why {tech} would be a good choice for this project:",
+                    {"tech": tech, "mvp_features": project.mvp_features, "description": project.description}
+                )
+                # Extract just the first paragraph for brevity
+                if suggested_reason:
+                    suggested_reason = suggested_reason.split("\n\n")[0]
+                    ai_suggestions += f"\n\n{tech}: {suggested_reason}"
+            
             questions.append({
                 "id": f"reason_{i}",
                 "question": f"Why did you choose {tech}?",
@@ -28,9 +45,13 @@ class ReasonerNode(BaseNodeHandler):
             "value": ""
         })
         
+        description = "Explain the reasoning behind your technology choices."
+        if ai_suggestions:
+            description += f"\n\nAI-Suggested Reasoning:{ai_suggestions}"
+        
         return {
             "title": "Technology Decision Reasoning",
-            "description": "Explain the reasoning behind your technology choices.",
+            "description": description,
             "questions": questions
         }
     

@@ -21,6 +21,10 @@ def main():
     st.title("🧠 Clarification Agent")
     st.write("Plan your projects with clarity before diving into code.")
     
+    # Show info about simulated AI responses
+    st.info("⚠️ This demo uses simulated AI responses. In a production environment, it would use OpenRouter or another LLM provider for more personalized suggestions.")
+    
+    
     # Sidebar for project selection/creation
     with st.sidebar:
         st.header("Project")
@@ -32,7 +36,7 @@ def main():
                 st.session_state.project_name = project_name
                 st.session_state.project_data = None
                 st.session_state.current_node = "ClarifyIntent"
-                st.experimental_rerun()
+                st.rerun()
         else:
             # List existing projects from .clarity folder
             if os.path.exists(".clarity"):
@@ -43,7 +47,7 @@ def main():
                         st.session_state.project_name = selected_project
                         st.session_state.project_data = load_project_data(selected_project)
                         st.session_state.current_node = "Start"
-                        st.experimental_rerun()
+                        st.rerun()
                 else:
                     st.info("No existing projects found.")
             else:
@@ -75,21 +79,41 @@ def main():
         if "questions" in node_result:
             with st.form(key=f"node_{current_node}"):
                 responses = {}
+                required_fields = []
+                
                 for q in node_result["questions"]:
+                    # Mark required fields
+                    is_required = q.get("required", True)  # Default to required
+                    label = q["question"]
+                    if is_required:
+                        label = f"{label} *"
+                        required_fields.append(q["id"])
+                    
                     if q.get("type") == "text":
-                        responses[q["id"]] = st.text_area(q["question"], key=q["id"])
+                        responses[q["id"]] = st.text_area(label, key=q["id"])
                     elif q.get("type") == "select":
-                        responses[q["id"]] = st.selectbox(q["question"], q["options"], key=q["id"])
+                        responses[q["id"]] = st.selectbox(label, q["options"], key=q["id"])
                     elif q.get("type") == "multiselect":
-                        responses[q["id"]] = st.multiselect(q["question"], q["options"], key=q["id"])
+                        responses[q["id"]] = st.multiselect(label, q["options"], key=q["id"])
                     else:
-                        responses[q["id"]] = st.text_input(q["question"], key=q["id"])
+                        responses[q["id"]] = st.text_input(label, key=q["id"])
+                
+                # Add a note about required fields
+                if required_fields:
+                    st.markdown("\* Required fields")
                 
                 submit = st.form_submit_button("Continue")
                 if submit:
-                    next_node = agent_manager.submit_responses(current_node, responses)
-                    st.session_state.current_node = next_node
-                    st.experimental_rerun()
+                    # Validate required fields
+                    missing_fields = [field for field in required_fields if not responses.get(field)]
+                    
+                    if missing_fields:
+                        field_names = [q["question"] for q in node_result["questions"] if q["id"] in missing_fields]
+                        st.error(f"Please fill in the required fields: {', '.join(field_names)}")
+                    else:
+                        next_node = agent_manager.submit_responses(current_node, responses)
+                        st.session_state.current_node = next_node
+                        st.rerun()
         
         # Display project progress
         st.sidebar.subheader("Progress")

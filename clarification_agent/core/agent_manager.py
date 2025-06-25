@@ -73,8 +73,12 @@ class ClarificationAgentManager:
             # Save project state
             self._save_project_state()
             
-            # Get next node
-            return self.workflow["transitions"].get(node_name, "End")
+            # Update current state
+            next_node = self.workflow["transitions"].get(node_name, "End")
+            self.current_state["node"] = next_node
+            self.current_state["project"] = self.project.dict()
+            
+            return next_node
         return node_name
     
     def _save_project_state(self):

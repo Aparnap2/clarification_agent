@@ -1,6 +1,7 @@
 from typing import Dict, Any
 from clarification_agent.nodes.base_node import BaseNodeHandler
 from clarification_agent.models.project import Project
+from clarification_agent.utils.llm_helper import LLMHelper
 
 class MVPScoperNode(BaseNodeHandler):
     """
@@ -9,9 +10,19 @@ class MVPScoperNode(BaseNodeHandler):
     
     def get_ui_data(self, project: Project) -> Dict[str, Any]:
         """Get UI data for the MVPScoper node"""
+        # Generate AI suggestions for MVP features based on goals
+        ai_suggestions = ""
+        if project.goals and not project.mvp_features:
+            llm_helper = LLMHelper()
+            suggestion = llm_helper.generate_suggestions(
+                "Based on these project goals, suggest 3-7 essential MVP features that would deliver core value:",
+                {"goals": project.goals, "description": project.description}
+            )
+            ai_suggestions = f"\n\nAI-Suggested MVP Features:\n{suggestion}"
+        
         return {
             "title": "MVP Feature Scoping",
-            "description": "Now, let's define the core features that will be included in the MVP.",
+            "description": f"Now, let's define the core features that will be included in the MVP.{ai_suggestions}",
             "questions": [
                 {
                     "id": "mvp_features",

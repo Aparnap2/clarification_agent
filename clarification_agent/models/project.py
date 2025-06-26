@@ -9,15 +9,15 @@ class Project(BaseModel):
     goals: List[str] = Field(default_factory=list)
     mvp_features: List[str] = Field(default_factory=list)
     excluded_features: List[str] = Field(default_factory=list)
-    target_user: Optional[str] = None
+    target_user: str = ""
     tech_stack: List[str] = Field(default_factory=list)
     decisions: Dict[str, str] = Field(default_factory=dict)
     file_map: Dict[str, str] = Field(default_factory=dict)
     tasks: List[Dict[str, Any]] = Field(default_factory=list)
     
     # Additional fields for project context
-    description: Optional[str] = None
-    purpose: Optional[str] = None
+    description: str = ""
+    purpose: str = ""
     constraints: List[str] = Field(default_factory=list)
     
     def dict(self) -> Dict[str, Any]:
@@ -43,11 +43,11 @@ class Project(BaseModel):
         self.goals = data.get("goals", [])
         self.mvp_features = data.get("mvp_features", [])
         self.excluded_features = data.get("excluded_features", [])
-        self.target_user = data.get("target_user")
+        self.target_user = data.get("target_user", "")
         self.tech_stack = data.get("tech_stack", [])
         self.decisions = data.get("decisions", {})
         self.file_map = data.get("file_map", {})
         self.tasks = data.get("tasks", [])
-        self.description = data.get("description")
-        self.purpose = data.get("purpose")
+        self.description = data.get("description", "")
+        self.purpose = data.get("purpose", "")
         self.constraints = data.get("constraints", [])

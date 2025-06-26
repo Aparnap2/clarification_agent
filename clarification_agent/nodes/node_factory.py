@@ -9,6 +9,7 @@ from clarification_agent.nodes.file_map_builder import FileMapBuilderNode
 from clarification_agent.nodes.task_planner import TaskPlannerNode
 from clarification_agent.nodes.exporter import ExporterNode
 from clarification_agent.nodes.start import StartNode
+from clarification_agent.nodes.dynamic_node import DynamicNode
 
 def get_node_handler(node_name: str) -> Optional[BaseNodeHandler]:
     """
@@ -20,6 +21,7 @@ def get_node_handler(node_name: str) -> Optional[BaseNodeHandler]:
     Returns:
         Node handler instance or None if not found
     """
+    # Standard node handlers
     node_map = {
         "Start": StartNode(),
         "ClarifyIntent": ClarifyIntentNode(),
@@ -32,4 +34,17 @@ def get_node_handler(node_name: str) -> Optional[BaseNodeHandler]:
         "Exporter": ExporterNode()
     }
     
-    return node_map.get(node_name)
+    # Check if we have a standard handler
+    handler = node_map.get(node_name)
+    if handler:
+        return handler
+    
+    # If not a standard node, try to create a dynamic node
+    # This allows for flexible node types determined by the LLM
+    try:
+        # Convert node name to a type string for the dynamic node
+        node_type = node_name.lower()
+        return DynamicNode(node_type)
+    except Exception as e:
+        print(f"Error creating dynamic node for {node_name}: {e}")
+        return None

@@ -1,7 +1,8 @@
 import streamlit as st
-from clarification_agent.core.agent_manager import ClarificationAgentManager
 import os
 import json
+import yaml
+from clarification_agent.core.conversation_agent import ConversationAgent
 
 st.set_page_config(
     page_title="🧠 Clarification Agent",
@@ -19,11 +20,16 @@ def load_project_data(project_name):
 
 def main():
     st.title("🧠 Clarification Agent")
-    st.write("Plan your projects with clarity before diving into code.")
+    st.write("Let's clarify your project through conversation.")
     
-    # Show info about simulated AI responses
-    st.info("⚠️ This demo uses simulated AI responses. In a production environment, it would use OpenRouter or another LLM provider for more personalized suggestions.")
+    # Initialize session state
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
     
+    if "agent" not in st.session_state:
+        st.session_state.agent = None
+        st.session_state.project_name = None
+        st.session_state.complete = False
     
     # Sidebar for project selection/creation
     with st.sidebar:
@@ -33,9 +39,15 @@ def main():
         if project_action == "Create New Project":
             project_name = st.text_input("Project Name:")
             if st.button("Start New Project") and project_name:
+                # Initialize new conversation agent
+                st.session_state.agent = ConversationAgent(project_name=project_name)
                 st.session_state.project_name = project_name
-                st.session_state.project_data = None
-                st.session_state.current_node = "ClarifyIntent"
+                st.session_state.messages = []
+                st.session_state.complete = False
+                
+                # Get initial message from agent
+                initial_message, _ = st.session_state.agent.process_user_input("")
+                st.session_state.messages.append({"role": "assistant", "content": initial_message})
                 st.rerun()
         else:
             # List existing projects from .clarity folder
@@ -44,91 +56,65 @@ def main():
                 if projects:
                     selected_project = st.selectbox("Select a project:", projects)
                     if st.button("Load Project"):
+                        project_data = load_project_data(selected_project)
+                        st.session_state.agent = ConversationAgent(
+                            project_name=selected_project,
+                            project_data=project_data
+                        )
                         st.session_state.project_name = selected_project
-                        st.session_state.project_data = load_project_data(selected_project)
-                        st.session_state.current_node = "Start"
+                        st.session_state.messages = []
+                        st.session_state.complete = False
+                        
+                        # Get initial message from agent
+                        initial_message, _ = st.session_state.agent.process_user_input("")
+                        st.session_state.messages.append({"role": "assistant", "content": initial_message})
                         st.rerun()
                 else:
                     st.info("No existing projects found.")
             else:
                 st.info("No existing projects found.")
     
-    # Main content area
-    if "project_name" in st.session_state:
-        st.header(f"Project: {st.session_state.project_name}")
+    # Display current project info if available
+    if st.session_state.project_name:
+        st.sidebar.subheader(f"Project: {st.session_state.project_name}")
         
-        # Initialize agent manager if needed
-        if "agent_manager" not in st.session_state:
-            st.session_state.agent_manager = ClarificationAgentManager(
-                project_name=st.session_state.project_name,
-                project_data=st.session_state.project_data
-            )
-        
-        # Display current node and handle interaction
-        current_node = st.session_state.get("current_node", "Start")
-        agent_manager = st.session_state.agent_manager
-        
-        # Process current node
-        node_result = agent_manager.process_node(current_node)
-        
-        # Display node content
-        st.subheader(node_result.get("title", current_node))
-        st.write(node_result.get("description", ""))
-        
-        # Handle node-specific UI
-        if "questions" in node_result:
-            with st.form(key=f"node_{current_node}"):
-                responses = {}
-                required_fields = []
-                
-                for q in node_result["questions"]:
-                    # Mark required fields
-                    is_required = q.get("required", True)  # Default to required
-                    label = q["question"]
-                    if is_required:
-                        label = f"{label} *"
-                        required_fields.append(q["id"])
-                    
-                    if q.get("type") == "text":
-                        responses[q["id"]] = st.text_area(label, key=q["id"])
-                    elif q.get("type") == "select":
-                        responses[q["id"]] = st.selectbox(label, q["options"], key=q["id"])
-                    elif q.get("type") == "multiselect":
-                        responses[q["id"]] = st.multiselect(label, q["options"], key=q["id"])
-                    else:
-                        responses[q["id"]] = st.text_input(label, key=q["id"])
-                
-                # Add a note about required fields
-                if required_fields:
-                    st.markdown("\* Required fields")
-                
-                submit = st.form_submit_button("Continue")
-                if submit:
-                    # Validate required fields
-                    missing_fields = [field for field in required_fields if not responses.get(field)]
-                    
-                    if missing_fields:
-                        field_names = [q["question"] for q in node_result["questions"] if q["id"] in missing_fields]
-                        st.error(f"Please fill in the required fields: {', '.join(field_names)}")
-                    else:
-                        next_node = agent_manager.submit_responses(current_node, responses)
-                        st.session_state.current_node = next_node
-                        st.rerun()
-        
-        # Display project progress
-        st.sidebar.subheader("Progress")
-        progress = agent_manager.get_progress()
-        st.sidebar.progress(progress["percentage"])
-        st.sidebar.write(f"{progress['completed']}/{progress['total']} steps completed")
-        
-        # Export options when complete
-        if progress["percentage"] == 1.0:
+        if st.session_state.complete:
             st.sidebar.success("Project planning complete!")
-            if st.sidebar.button("Export All Files"):
-                agent_manager.export_all()
-                st.sidebar.success("Files exported successfully!")
-    else:
-        st.info("Select or create a project to get started.")
+            if st.sidebar.button("View Generated Files"):
+                st.sidebar.markdown("### Generated Files")
+                st.sidebar.markdown("- README.md")
+                st.sidebar.markdown("- .plan.yml")
+                st.sidebar.markdown("- architecture.md")
+                st.sidebar.markdown("- .clarity/*.json")
+    
+    # Display chat messages
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+    
+    # Chat input
+    if st.session_state.agent and not st.session_state.complete:
+        user_input = st.chat_input("Type your response here...")
+        if user_input:
+            # Add user message to chat
+            st.session_state.messages.append({"role": "user", "content": user_input})
+            
+            # Get agent response
+            with st.spinner("Thinking..."):
+                try:
+                    agent_response, is_complete = st.session_state.agent.process_user_input(user_input)
+                    st.session_state.messages.append({"role": "assistant", "content": agent_response})
+                    st.session_state.complete = is_complete
+                except Exception as e:
+                    st.error(f"An error occurred: {str(e)}")
+                    st.session_state.messages.append({"role": "assistant", "content": "I'm sorry, I encountered an error. Let's continue with the next step."})
+                    # Move to the next stage to recover from error
+                    if hasattr(st.session_state.agent, 'current_stage_index'):
+                        st.session_state.agent.current_stage_index += 1
+            
+            st.rerun()
+    elif not st.session_state.agent:
+        st.info("Create or load a project to start the conversation.")
 
 if __name__ == "__main__":
     main()

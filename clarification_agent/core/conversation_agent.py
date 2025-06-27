@@ -70,47 +70,243 @@ class ConversationAgent:
         self.current_stage_index = 0
         self.complete = False
     
-    def process_user_input(self, user_input: str) -> Tuple[str, bool]:
+    def process_user_input(self, user_input: str, stream: bool = False):
         """
         Process user input and dynamically determine the next conversation step.
         
         Args:
             user_input: The user's input text
+            stream: Whether to stream the response
             
         Returns:
-            Tuple of (agent response, is_complete)
+            If stream=False: Tuple of (agent response, is_complete)
+            If stream=True: Generator that yields chunks of the response, and a boolean indicating completion
         """
         # For the first message (empty input), just return the intro
         if not user_input and not self.conversation_history:
-            intro_message = self._get_stage_message("clarify_project")
+            intro_message = "I'm your AI Clarification Agent. I'll help you define and scope your project. What are you looking to build?"
             self.conversation_history.append({"role": "assistant", "content": intro_message})
             return intro_message, False
         
         # Add user input to conversation
         if user_input:
             self.conversation_history.append({"role": "user", "content": user_input})
+        
+        # Generate a direct response to the user's input using the LLM
+        if stream:
+            # For streaming, return a generator that yields chunks
+            response_generator = self._generate_dynamic_response(user_input, stream=True)
             
-            # Update project data based on user input
-            self._update_project_from_input(user_input)
+            # Define a wrapper generator that collects the full response
+            def process_stream():
+                full_response = ""
+                for chunk in response_generator:
+                    full_response += chunk
+                    yield chunk
+                
+                # After collecting the full response, process it
+                is_complete = False
+                if "complete" in full_response.lower() or "summary" in full_response.lower() or "finish" in full_response.lower():
+                    self.complete = True
+                    self._generate_output_files()
+                    is_complete = True
+                
+                # Add the response to conversation history
+                self.conversation_history.append({"role": "assistant", "content": full_response})
+                
+                # Update project data based on the conversation
+                self._update_project_from_conversation()
+                
+                # Return completion status with the last chunk
+                return is_complete
+            
+            return process_stream(), False
+        else:
+            # For non-streaming, return the full response
+            response = self._generate_dynamic_response(user_input)
+            
+            # Check if we should complete the conversation
+            is_complete = False
+            if "complete" in response.lower() or "summary" in response.lower() or "finish" in response.lower():
+                self.complete = True
+                self._generate_output_files()
+                summary = self._get_stage_message("summarize")
+                self.conversation_history.append({"role": "assistant", "content": summary})
+                return summary, True
+            
+            # Add the response to conversation history
+            self.conversation_history.append({"role": "assistant", "content": response})
+            
+            # Update project data based on the conversation
+            self._update_project_from_conversation()
+            
+            return response, False
         
-        # Determine the next stage dynamically using LLM
+    def _generate_dynamic_response(self, user_input: str, stream: bool = False):
+        """
+        Generate a dynamic response to the user's input using the LLM.
+        
+        Args:
+            user_input: The user's latest input
+            stream: Whether to stream the response
+            
+        Returns:
+            If stream=False: A response string from the LLM
+            If stream=True: A generator that yields chunks of the response
+        """
+        # Get the current project state
+        project_state = {
+            "description": self.project.description,
+            "mvp_features": self.project.mvp_features,
+            "excluded_features": self.project.excluded_features,
+            "tech_stack": self.project.tech_stack,
+            "file_map": bool(self.project.file_map),
+            "tasks": bool(self.project.tasks)
+        }
+        
+        # Build conversation context for the LLM
+        conversation_context = []
+        for i in range(max(0, len(self.conversation_history) - 4), len(self.conversation_history)):
+            msg = self.conversation_history[i]
+            conversation_context.append({"role": msg["role"], "content": msg["content"]})
+        
+        # Use the LLM helper to generate a response
+        try:
+            # Build a prompt for the LLM
+            system_message = (
+                "You are an AI assistant helping to clarify project requirements through conversation. "
+                "Your goal is to help the user define their project, identify MVP features, exclude unnecessary features, "
+                "select appropriate technologies, and plan development tasks. "
+                "Respond directly to the user's input and ask relevant follow-up questions based on the conversation context. "
+                "Don't follow a rigid script - be conversational and adapt to what the user needs help with. "
+                "Stay up-to-date with the latest tech stacks, frameworks, and LLM developments."
+            )
+            
+            # Add project state to system message if we have any information
+            if any(project_state.values()):
+                system_message += "\n\nCurrent project state:\n"
+                if project_state["description"]:
+                    system_message += f"- Description: {project_state['description']}\n"
+                if project_state["mvp_features"]:
+                    system_message += f"- MVP Features: {', '.join(project_state['mvp_features'])}\n"
+                if project_state["excluded_features"]:
+                    system_message += f"- Excluded Features: {', '.join(project_state['excluded_features'])}\n"
+                if project_state["tech_stack"]:
+                    system_message += f"- Tech Stack: {', '.join(project_state['tech_stack'])}\n"
+                if project_state["file_map"]:
+                    system_message += "- File structure has been defined\n"
+                if project_state["tasks"]:
+                    system_message += "- Development tasks have been defined\n"
+            
+            # Create messages for the LLM
+            messages = [
+                {"role": "system", "content": system_message}
+            ]
+            
+            # Add conversation context
+            messages.extend(conversation_context)
+            
+            # Call the LLM with or without streaming
+            response = self.llm._call_openrouter(messages, stream=stream)
+            
+            if response:
+                return response
+        except Exception as e:
+            print(f"Error generating dynamic response: {e}")
+        
+        # Fallback: Use the stage-based approach if LLM fails
         next_stage = self._determine_next_stage(user_input)
+        return self._get_stage_message(next_stage)
         
-        # Check if we should complete the conversation
-        if next_stage == "summarize" or next_stage == "complete":
-            self.complete = True
-            self._generate_output_files()
-            summary = self._get_stage_message("summarize")
-            self.conversation_history.append({"role": "assistant", "content": summary})
-            return summary, True
+    def _update_project_from_conversation(self):
+        """
+        Update project data based on the entire conversation context.
+        """
+        # Get the last few messages from the conversation
+        recent_messages = self.conversation_history[-min(4, len(self.conversation_history)):]
+        recent_text = "\n".join([msg["content"] for msg in recent_messages])
         
-        # Get the next message for the determined stage
-        next_message = self._get_stage_message(next_stage)
-        
-        # Add to conversation history
-        self.conversation_history.append({"role": "assistant", "content": next_message})
-        
-        return next_message, False
+        # Use the LLM to extract project information
+        try:
+            # Build a prompt for the LLM
+            system_message = "You are an AI assistant helping to extract project information from a conversation."
+            
+            user_message = "Based on the conversation, extract relevant project information.\n\n"
+            user_message += "Conversation:\n"
+            user_message += "\n".join([f"{msg['role'].capitalize()}: {msg['content']}" for msg in recent_messages])
+            
+            user_message += "\n\nRespond with a JSON object containing these fields (only if mentioned in the conversation):\n"
+            user_message += "- description: Project description\n"
+            user_message += "- mvp_features: Array of MVP features\n"
+            user_message += "- excluded_features: Array of features to exclude from MVP\n"
+            user_message += "- tech_stack: Array of technologies\n"
+            
+            # Create messages for the LLM
+            messages = [
+                {"role": "system", "content": system_message},
+                {"role": "user", "content": user_message}
+            ]
+            
+            # Call the LLM
+            response = self.llm._call_openrouter(messages)
+            
+            if response:
+                # Extract JSON from the response if needed
+                import json
+                import re
+                
+                json_str = response
+                if '```json' in response:
+                    json_str = response.split('```json')[1].split('```')[0].strip()
+                elif '```' in response:
+                    json_str = response.split('```')[1].split('```')[0].strip()
+                    
+                updates = json.loads(json_str)
+                
+                # Update project fields
+                if 'description' in updates and updates['description'] and not self.project.description:
+                    self.project.description = updates['description']
+                    
+                if 'mvp_features' in updates and updates['mvp_features']:
+                    # Handle both array and string formats
+                    if isinstance(updates['mvp_features'], list):
+                        self.project.mvp_features = updates['mvp_features']
+                    elif isinstance(updates['mvp_features'], str):
+                        # Parse features from string (one per line)
+                        features = [line.strip().lstrip('- ').lstrip('* ').lstrip('1234567890. ') 
+                                   for line in updates['mvp_features'].split('\n') 
+                                   if line.strip()]
+                        self.project.mvp_features = features
+                        
+                if 'excluded_features' in updates and updates['excluded_features']:
+                    # Handle both array and string formats
+                    if isinstance(updates['excluded_features'], list):
+                        self.project.excluded_features = updates['excluded_features']
+                    elif isinstance(updates['excluded_features'], str):
+                        # Parse features from string (one per line)
+                        features = [line.strip().lstrip('- ').lstrip('* ').lstrip('1234567890. ') 
+                                   for line in updates['excluded_features'].split('\n') 
+                                   if line.strip()]
+                        self.project.excluded_features = features
+                        
+                if 'tech_stack' in updates and updates['tech_stack']:
+                    # Handle both array and string formats
+                    if isinstance(updates['tech_stack'], list):
+                        self.project.tech_stack = updates['tech_stack']
+                    elif isinstance(updates['tech_stack'], str):
+                        # Parse tech stack from string (one per line)
+                        techs = [line.strip().lstrip('- ').lstrip('* ').lstrip('1234567890. ') 
+                                for line in updates['tech_stack'].split('\n') 
+                                if line.strip()]
+                        self.project.tech_stack = techs
+                        
+                # Save project state
+                self._save_project_data()
+                
+        except Exception as e:
+            print(f"Error updating project from conversation: {e}")
+            # Fallback to the old method
+            self._update_project_from_input(recent_text)
         
     def _determine_next_stage(self, user_input: str) -> str:
         """

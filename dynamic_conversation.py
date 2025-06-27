@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Dynamic conversation example for the Clarification Agent.
-This version uses LLM to determine the conversation flow dynamically.
+Fully dynamic conversation for the Clarification Agent.
+This version uses LLM to directly respond to user input without following a predefined script.
 """
 import os
 import sys
@@ -15,9 +15,11 @@ def clear_screen():
 def print_header():
     """Print the header"""
     print("=" * 80)
-    print("🧠 Clarification Agent - Dynamic Conversation Mode")
+    print("🧠 Clarification Agent - Fully Dynamic Conversation")
     print("=" * 80)
-    print("Type 'exit' to quit at any time.")
+    print("Have a natural conversation with the agent about your project.")
+    print("The agent will adapt to your needs rather than following a script.")
+    print("\nType 'exit' to quit at any time.")
     print("-" * 80)
 
 def load_project_data(project_name):
@@ -55,7 +57,7 @@ def main():
     agent = ConversationAgent(project_name=project_name, project_data=project_data)
     
     # Start conversation
-    print("\nStarting dynamic conversation...\n")
+    print("\nStarting conversation...\n")
     
     # Get initial message
     response, is_complete = agent.process_user_input("")
@@ -75,7 +77,7 @@ def main():
             print(f"Agent: {response}\n")
         except Exception as e:
             print(f"Error: {str(e)}")
-            print("Agent: I'm sorry, I encountered an error. Let's continue with the next step.\n")
+            print("Agent: I'm sorry, I encountered an error. Let's try to continue.\n")
     
     if is_complete:
         print("\n" + "=" * 80)

@@ -25,16 +25,18 @@ class LLMHelper:
             print("Warning: OPENROUTER_API_KEY not found in environment variables.")
             print("Using placeholder responses instead of actual AI.")
     
-    def _call_openrouter(self, messages: List[Dict[str, str]], temperature: float = 0.7) -> Optional[str]:
+    def _call_openrouter(self, messages: List[Dict[str, str]], temperature: float = 0.7, stream: bool = False) -> Optional[str]:
         """
         Call OpenRouter API with the given messages.
         
         Args:
             messages: List of message objects with role and content
             temperature: Temperature for generation (0.0 to 1.0)
+            stream: Whether to stream the response
             
         Returns:
             Generated text or None if API call fails
+            If stream=True, returns a generator that yields chunks of text
         """
         if not self.api_key:
             return None
@@ -47,14 +49,54 @@ class LLMHelper:
         data = {
             "model": self.model_name,
             "messages": messages,
-            "temperature": temperature
+            "temperature": temperature,
+            "stream": stream
         }
         
         try:
-            response = requests.post(self.api_url, headers=headers, json=data)
-            response.raise_for_status()
-            result = response.json()
-            return result["choices"][0]["message"]["content"]
+            if stream:
+                # Streaming mode
+                response = requests.post(self.api_url, headers=headers, json=data, stream=True)
+                response.raise_for_status()
+                
+                # Return a generator that yields chunks of text
+                def generate():
+                    collected_chunks = []
+                    collected_messages = []
+                    
+                    for chunk in response.iter_lines():
+                        if chunk:
+                            chunk = chunk.decode('utf-8')
+                            if chunk.startswith('data: '):
+                                chunk = chunk[6:]  # Remove 'data: ' prefix
+                                
+                                # Skip [DONE] message
+                                if chunk == '[DONE]':
+                                    break
+                                    
+                                try:
+                                    chunk_data = json.loads(chunk)
+                                    choices = chunk_data.get('choices', [])
+                                    if choices and len(choices) > 0:
+                                        delta = choices[0].get('delta', {})
+                                        if 'content' in delta and delta['content']:
+                                            content = delta['content']
+                                            collected_chunks.append(chunk)
+                                            collected_messages.append(content)
+                                            yield content
+                                except Exception as e:
+                                    print(f"Error parsing chunk: {e}")
+                    
+                    # Return the full message when done
+                    return ''.join(collected_messages)
+                
+                return generate()
+            else:
+                # Non-streaming mode
+                response = requests.post(self.api_url, headers=headers, json=data)
+                response.raise_for_status()
+                result = response.json()
+                return result["choices"][0]["message"]["content"]
         except Exception as e:
             print(f"Error calling OpenRouter API: {e}")
             return None

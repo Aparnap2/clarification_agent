@@ -1,47 +1,88 @@
 import streamlit as st
+import os
 from schemas import Project, Task, Idea, Clarification
 from agents.clarifier_agent import ClarifierAgent
 from agents.planner_agent import PlannerAgent
 
-# In-memory storage & agent initialization
-if 'projects' not in st.session_state:
-    st.session_state.projects = []
-if 'clarifier_agent' not in st.session_state:
-    st.session_state.clarifier_agent = ClarifierAgent()
-if 'planner_agent' not in st.session_state:
-    st.session_state.planner_agent = PlannerAgent()
-if 'current_project' not in st.session_state:
-    st.session_state.current_project = None
-if 'user_input_key' not in st.session_state: # To reset input field
-    st.session_state.user_input_key = 0
-if 'active_clarification' not in st.session_state: # To hold pending clarification
-    st.session_state.active_clarification = None
+# Attempt to load environment variables for API keys
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass # python-dotenv not installed/needed if env vars are set externally
 
+# --- Agent and State Initialization ---
+def initialize_state():
+    if 'projects' not in st.session_state:
+        st.session_state.projects = []
+    if 'current_project' not in st.session_state:
+        st.session_state.current_project = None
+    if 'user_input_key' not in st.session_state:
+        st.session_state.user_input_key = 0
+    # Active clarification is not used in the current simplified flow where planner uses original goal
+    # if 'active_clarification' not in st.session_state:
+    #     st.session_state.active_clarification = None
+
+    # Initialize agents, handle potential API key errors gracefully for UI
+    if 'clarifier_agent' not in st.session_state:
+        try:
+            st.session_state.clarifier_agent = ClarifierAgent()
+        except ValueError as e: # Raised if API key is missing
+            st.session_state.clarifier_agent = None
+            st.session_state.clarifier_error = str(e)
+    if 'planner_agent' not in st.session_state:
+        try:
+            st.session_state.planner_agent = PlannerAgent()
+        except ValueError as e: # Raised if API key is missing
+            st.session_state.planner_agent = None
+            st.session_state.planner_error = str(e)
 
 def handle_user_goal_input(user_goal: str):
-    """Handles the initial user goal input."""
-    if st.session_state.current_project:
-        # Step 1: Clarifier Agent (Conceptual - for now, we'll directly generate a question)
-        # In a more complex flow, we might await user response to clarification
-        clarification_obj = st.session_state.clarifier_agent.ask_question(user_goal, context=st.session_state.current_project.name)
-        st.session_state.current_project.clarifications.append(clarification_obj)
-        st.session_state.active_clarification = clarification_obj # Store for potential follow-up
+    """Handles the initial user goal input using enhanced agents."""
+    if not st.session_state.current_project:
+        st.error("Please select or create a project first.")
+        return
 
-        st.info(f"Clarifier Agent asks: {clarification_obj.question}")
-        # For this basic flow, we'll assume the initial goal is clear enough
-        # and proceed to planning. Or, we can add a button "Proceed with this goal"
+    # Check if agents are available
+    if not st.session_state.clarifier_agent:
+        st.error(f"Clarifier Agent not available: {st.session_state.get('clarifier_error', 'Unknown error')}. Please set OPENROUTER_API_KEY.")
+        return
+    if not st.session_state.planner_agent:
+        st.error(f"Planner Agent not available: {st.session_state.get('planner_error', 'Unknown error')}. Please set OPENROUTER_API_KEY.")
+        return
 
-        # Step 2: Planner Agent
-        new_tasks = st.session_state.planner_agent.generate_initial_plan(user_goal, st.session_state.current_project.id)
+    project_ctx = st.session_state.current_project.description or st.session_state.current_project.name
+
+    # Step 1: Clarifier Agent - Generates and logs a question
+    with st.spinner("Clarifier Agent is thinking..."):
+        clarification_obj = st.session_state.clarifier_agent.ask_question(user_goal, project_context=project_ctx)
+
+    st.session_state.current_project.clarifications.append(clarification_obj)
+    st.info(f"Clarifier Agent asks: {clarification_obj.question}")
+    # For this iteration, we display the question but the Planner will use the original goal.
+    # A future step could involve a button "Answer & Plan" or "Plan with this goal".
+
+    # Step 2: Planner Agent - Generates tasks based on the original goal
+    with st.spinner("Planner Agent is generating tasks..."):
+        new_tasks = st.session_state.planner_agent.generate_initial_plan(
+            goal=user_goal,
+            project_id=st.session_state.current_project.id,
+            project_context=project_ctx
+        )
+
+    if new_tasks:
         st.session_state.current_project.tasks.extend(new_tasks)
         st.success(f"Planner Agent generated {len(new_tasks)} tasks for '{user_goal}'.")
-        st.session_state.user_input_key += 1 # Reset input field by changing its key
-        st.experimental_rerun() # Refresh UI to show new tasks and clear input
     else:
-        st.error("Please select or create a project first.")
+        st.warning("Planner Agent did not generate any tasks. You might need to refine the goal or check agent logs.")
+
+    st.session_state.user_input_key += 1 # Reset input field by changing its key
+    st.experimental_rerun()
 
 def main():
     st.set_page_config(layout="wide", page_title="Personal AI Strategy Assistant")
+    initialize_state() # Ensure all session state keys and agents are initialized
+
     st.title("Personal AI Strategy Assistant")
 
     # --- Sidebar for Project Creation and Selection ---

@@ -1,6 +1,6 @@
 from typing import Optional
 from clarification_agent.nodes.base_node import BaseNodeHandler
-from clarification_agent.nodes.clarify_intent import ClarifyIntentNode
+from clarification_agent.nodes.clarify_intent import ClarificationNode
 from clarification_agent.nodes.not_builder import NotBuilderNode
 from clarification_agent.nodes.mvp_scoper import MVPScoperNode
 from clarification_agent.nodes.stack_selector import StackSelectorNode
@@ -24,7 +24,7 @@ def get_node_handler(node_name: str) -> Optional[BaseNodeHandler]:
     # Standard node handlers
     node_map = {
         "Start": StartNode(),
-        "ClarifyIntent": ClarifyIntentNode(),
+        "ClarifyIntent": ClarificationNode(),
         "NotBuilder": NotBuilderNode(),
         "MVPScoper": MVPScoperNode(),
         "StackSelector": StackSelectorNode(),

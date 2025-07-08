@@ -1,0 +1,143 @@
+nodes:
+  start:
+    handler: StartNodeHandler
+    label: "Start Project"
+    emoji: "🚀"
+    color: "#4CAF50"
+    purpose: "Initialize the project and capture initial input"
+    clarity_rules:
+      - type: "min_words"
+        threshold: 3
+        message: "Please provide more details about your project"
+      - type: "specificity_score"
+        threshold: 0.6
+        openrouter_prompt: "Rate the specificity of this project description from 0-1: '{response}'. Return only a number."
+    transitions:
+      default: "clarify"
+    optional: false
+    retry: true
+
+  clarify:
+    handler: "ClarifyIntentNodeHandler"
+    label: "Clarify Intent"
+    emoji: "❓"
+    color: "#2196F3"
+    purpose: "Define project goals and refine purpose"
+    clarity_rules:
+      - type: "required_entities"
+        entities: ["platform", "features"]
+        message: "Please specify the platform and key features"
+      - type: "specificity_score"
+        threshold: 0.7
+        openrouter_prompt: "Rate how clearly defined this project intent is from 0-1: '{response}'. Return only a number."
+    transitions:
+      default: "scope"
+      conditional: "_determine_next_node_with_llm"
+    optional: false
+    retry: true
+    parallel_nodes: ["exclude"]
+
+  scope:
+    handler: "MVPScoperNodeHandler"
+    label: "MVP Features"
+    emoji: "⭐"
+    color: "#9C27B0"
+    purpose: "Identify minimum viable product features"
+    clarity_rules:
+      - type: "min_features"
+        threshold: 2
+        message: "Please specify at least 2 MVP features"
+      - type: "feature_clarity"
+        threshold: 0.7
+        openrouter_prompt: "Rate how well-defined these MVP features are from 0-1: '{response}'. Return only a number."
+    transitions:
+      default: "exclude"
+    optional: false
+    retry: true
+
+  exclude:
+    handler: "NotBuilderNodeHandler"
+    label: "Out of Scope"
+    emoji: "🚫"
+    color: "#FF9800"
+    purpose: "Define what's NOT included in the MVP"
+    clarity_rules:
+      - type: "min_exclusions"
+        threshold: 1
+        message: "Please specify at least one item to exclude from the MVP"
+    transitions:
+      default: "tech"
+    optional: true
+    retry: true
+    skip: true
+
+  tech:
+    handler: "StackSelectorNodeHandler"
+    label: "Tech Stack"
+    emoji: "🛠️"
+    color: "#00BCD4"
+    purpose: "Select appropriate technologies"
+    clarity_rules:
+      - type: "tech_completeness"
+        required_categories: ["frontend", "backend", "database"]
+        message: "Please specify technologies for frontend, backend, and database"
+      - type: "tech_compatibility"
+        threshold: 0.8
+        openrouter_prompt: "Rate the compatibility of these technologies from 0-1: '{response}'. Return only a number."
+    transitions:
+      default: "architecture"
+    optional: false
+    retry: true
+    web_search: true
+    search_query: "{project_name} tech stack best practices"
+
+  architecture:
+    handler: "FileMapBuilderNodeHandler"
+    label: "Architecture"
+    emoji: "🏗️"
+    color: "#795548"
+    purpose: "Design system architecture and file structure"
+    clarity_rules:
+      - type: "architecture_approval"
+        threshold: 0.8
+        openrouter_prompt: "Does the user approve this architecture? Rate confidence from 0-1: '{response}'. Return only a number."
+    transitions:
+      default: "tasks"
+    optional: false
+    retry: true
+
+  tasks:
+    handler: "TaskPlannerNodeHandler"
+    label: "Task Planning"
+    emoji: "📋"
+    color: "#607D8B"
+    purpose: "Break down into development tasks"
+    clarity_rules:
+      - type: "task_approval"
+        threshold: 0.7
+        openrouter_prompt: "Does the user approve these development tasks? Rate confidence from 0-1: '{response}'. Return only a number."
+    transitions:
+      default: "review"
+    optional: false
+    retry: true
+
+  review:
+    handler: "ExporterNodeHandler"
+    label: "Final Output"
+    emoji: "🎉"
+    color: "#4CAF50"
+    purpose: "Review and generate project files"
+    clarity_rules:
+      - type: "final_approval"
+        threshold: 0.9
+        openrouter_prompt: "Is the user satisfied with the final project specification? Rate confidence from 0-1: '{response}'. Return only a number."
+    transitions:
+      default: "complete"
+    optional: false
+    retry: false
+
+workflow:
+  start_node: "start"
+  end_node: "review"
+  allow_backtrack: true
+  save_checkpoints: true

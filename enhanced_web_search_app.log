@@ -1,0 +1,10 @@
+2025-06-28 19:38:49,424 - enhanced_web_search_app - INFO - Performing web search for: What are the latest React alternatives for 2024?
+2025-06-28 19:38:49,749 - enhanced_web_search_app - ERROR - Error in web search: BrowserType.launch: Executable doesn't exist at /home/aparna/.cache/ms-playwright/chromium-1179/chrome-linux/chrome
+╔════════════════════════════════════════════════════════════╗
+║ Looks like Playwright was just installed or updated.       ║
+║ Please run the following command to download new browsers: ║
+║                                                            ║
+║     playwright install                                     ║
+║                                                            ║
+║ <3 Playwright Team                                         ║
+╚════════════════════════════════════════════════════════════╝

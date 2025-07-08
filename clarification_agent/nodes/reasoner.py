@@ -1,73 +1,66 @@
-from typing import Dict, Any
-from clarification_agent.nodes.base_node import BaseNodeHandler
-from clarification_agent.models.project import Project
+from typing import Dict, Any, List
+from clarification_agent.nodes.base_node import BaseNode
 from clarification_agent.utils.llm_helper import LLMHelper
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-class ReasonerNode(BaseNodeHandler):
-    """
-    Node for reasoning through technology choices and decisions.
-    """
+class ReasonerNode(BaseNode):
+    """Node for generating a final answer based on the clarified query and available context."""
     
-    def get_ui_data(self, project: Project) -> Dict[str, Any]:
-        """Get UI data for the Reasoner node"""
-        # Create questions for each technology in the stack
-        questions = []
+    def __init__(self):
+        """Initialize the reasoner node with helper."""
+        self.llm_helper = LLMHelper()
+
+    def execute(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """Generates a final response using the conversation history and search context."""
+        messages = state.get("messages", [])
+        context = state.get("context", {})
         
-        # Generate AI suggestions for technology reasoning
-        llm_helper = LLMHelper()
-        ai_suggestions = ""
-        
-        for i, tech in enumerate(project.tech_stack):
-            # Get AI-suggested reasoning if not already provided
-            suggested_reason = ""
-            if not project.decisions.get(tech):
-                suggested_reason = llm_helper.generate_suggestions(
-                    f"Explain why {tech} would be a good choice for this project:",
-                    {"tech": tech, "mvp_features": project.mvp_features, "description": project.description}
-                )
-                # Extract just the first paragraph for brevity
-                if suggested_reason:
-                    suggested_reason = suggested_reason.split("\n\n")[0]
-                    ai_suggestions += f"\n\n{tech}: {suggested_reason}"
+        if not messages:
+            return state
             
-            questions.append({
-                "id": f"reason_{i}",
-                "question": f"Why did you choose {tech}?",
-                "type": "text",
-                "value": project.decisions.get(tech, "")
-            })
+        # Check if we have search results in the context
+        search_results = context.get("search_results", [])
+        context_text = ""
         
-        # Add a question for additional decisions
-        questions.append({
-            "id": "additional_decisions",
-            "question": "Any other architectural decisions to document? (Format: Decision: Reasoning)",
-            "type": "text",
-            "value": ""
-        })
+        if search_results:
+            # Format search results as context
+            context_text = "\n\nRelevant information from search:\n"
+            for i, result in enumerate(search_results, 1):
+                source = result.get("source", "Web")
+                title = result.get("title", "Search Result")
+                snippet = result.get("snippet", "No preview available")
+                url = result.get("url", "")
+                
+                context_text += f"\n[{i}] {title}\n"
+                context_text += f"Source: {source}\n"
+                context_text += f"Content: {snippet}\n"
+                if url:
+                    context_text += f"URL: {url}\n"
         
-        description = "Explain the reasoning behind your technology choices."
-        if ai_suggestions:
-            description += f"\n\nAI-Suggested Reasoning:{ai_suggestions}"
+        # Create a prompt for the LLM to generate a final answer
+        system_prompt = f"""Based on the following conversation, provide a comprehensive answer to the user's query. 
+        The user's intent should now be clear.{context_text}
         
-        return {
-            "title": "Technology Decision Reasoning",
-            "description": description,
-            "questions": questions
-        }
-    
-    def process_responses(self, project: Project, responses: Dict[str, Any]) -> None:
-        """Process responses for the Reasoner node"""
-        # Process technology reasons
-        for i, tech in enumerate(project.tech_stack):
-            reason = responses.get(f"reason_{i}", "")
-            if reason:
-                project.decisions[tech] = reason
+        If search results are provided, use them to enhance your answer.
+        Provide a thoughtful, accurate, and helpful response that directly addresses the user's needs.
+        """
         
-        # Process additional decisions
-        additional = responses.get("additional_decisions", "")
-        if additional:
-            lines = additional.split("\\n")
-            for line in lines:
-                if ":" in line:
-                    decision, reasoning = line.split(":", 1)
-                    project.decisions[decision.strip()] = reasoning.strip()
+        # Prepare messages for the LLM
+        formatted_messages = [SystemMessage(content=system_prompt)]
+        
+        # Add conversation history
+        for msg in messages:
+            if msg.type == "human":
+                formatted_messages.append(HumanMessage(content=msg.content))
+            elif msg.type == "ai":
+                formatted_messages.append(AIMessage(content=msg.content))
+        
+        # Generate the final answer
+        response = self.llm_helper.llm.invoke(formatted_messages)
+        final_answer = response.content
+        
+        # Add the final answer to the message list
+        new_message = AIMessage(content=final_answer)
+        state["messages"].append(new_message)
+        
+        return state

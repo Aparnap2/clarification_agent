@@ -23,10 +23,14 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - [%(funcName)s:%(lineno)d] - %(message)s',
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler('orchestrator.log', mode='a'),
-        logging.FileHandler('orchestrator_errors.log', mode='a', level=logging.ERROR)
+        logging.FileHandler('orchestrator.log', mode='a')
     ]
 )
+
+# Add separate error handler
+error_handler = logging.FileHandler('orchestrator_errors.log', mode='a')
+error_handler.setLevel(logging.ERROR)
+logging.getLogger().addHandler(error_handler)
 
 # Create logger with structured context
 logger = logging.getLogger(__name__)
@@ -62,7 +66,7 @@ class ProductDevelopmentOrchestrator:
     to ensure business-first development approach.
     """
     
-    def __init__(self, api_key: Optional[str] = None, model: str = "openai/gpt-4o-mini", enable_debug: bool = False):
+    def __init__(self, api_key: Optional[str] = None, model: str = "moonshotai/kimi-k2:free", enable_debug: bool = False):
         """
         Initialize the orchestrator with agents and workflow.
         
@@ -138,9 +142,8 @@ class ProductDevelopmentOrchestrator:
         workflow.add_edge("execution_roadmap", END)
         workflow.add_edge("rejection_report", END)
         
-        # Compile with SQLite checkpointer
-        checkpointer = SqliteSaver("checkpoints.db")
-        compiled_graph = workflow.compile(checkpointer=checkpointer)
+        # Compile without checkpointer for now to avoid compatibility issues
+        compiled_graph = workflow.compile()
         
         logger.info("Product development workflow graph compiled successfully")
         return compiled_graph
@@ -193,7 +196,26 @@ class ProductDevelopmentOrchestrator:
             
             try:
                 # Run the workflow with thread_id for SQLite checkpointer
-                final_state = await self.graph.ainvoke(initial_state, config=config)
+                result = await self.graph.ainvoke(initial_state, config=config)
+                
+                # Ensure result is a ProductState object
+                if isinstance(result, dict):
+                    logger.warning("Workflow returned dict instead of ProductState, converting...")
+                    try:
+                        final_state = ProductState(**result)
+                    except Exception as conversion_error:
+                        logger.error(f"Failed to convert workflow result to ProductState: {conversion_error}")
+                        # Use initial state with error information
+                        final_state = initial_state
+                        final_state.market_validation["workflow_conversion_error"] = str(conversion_error)
+                        final_state.market_validation["workflow_conversion_timestamp"] = datetime.now().isoformat()
+                elif isinstance(result, ProductState):
+                    final_state = result
+                else:
+                    logger.error(f"Workflow returned unexpected type: {type(result)}")
+                    final_state = initial_state
+                    final_state.market_validation["workflow_type_error"] = f"Unexpected result type: {type(result)}"
+                    final_state.market_validation["workflow_type_timestamp"] = datetime.now().isoformat()
                 
                 # Save final state with error handling
                 try:

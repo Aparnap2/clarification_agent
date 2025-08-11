@@ -337,7 +337,7 @@ class ProductStrategyUI:
             
             # Acceptance criteria
             if feature.acceptance_criteria:
-                with st.expander(f"Acceptance Criteria ({len(feature.acceptance_criteria)})", key=f"criteria-{key}"):
+                with st.expander(f"Acceptance Criteria ({len(feature.acceptance_criteria)})"):
                     for i, criterion in enumerate(feature.acceptance_criteria, 1):
                         st.markdown(f"{i}. {criterion}")
             
@@ -558,12 +558,12 @@ class ProductStrategyUI:
         with col1:
             if overall_score != "N/A":
                 score_float = float(overall_score)
-                score_color = "green" if score_float >= 7 else "red"
+                delta_color = "normal" if score_float >= 7 else "inverse"
                 st.metric(
                     "Business Viability Score",
                     f"{overall_score}/10",
                     delta="Viable" if score_float >= 7 else "Needs Work",
-                    delta_color=score_color
+                    delta_color=delta_color
                 )
             else:
                 st.metric("Business Viability Score", "N/A")

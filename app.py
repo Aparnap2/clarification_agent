@@ -14,6 +14,10 @@ import logging
 import os
 from datetime import datetime
 from typing import Optional
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Configure logging
 logging.basicConfig(
@@ -135,7 +139,7 @@ class AIStrategyAssistantApp:
             st.session_state.api_key_configured = False
         
         if 'model_selection' not in st.session_state:
-            st.session_state.model_selection = "openai/gpt-4o-mini"
+            st.session_state.model_selection = "moonshotai/kimi-k2:free"
     
     def render_configuration_sidebar(self):
         """
@@ -167,11 +171,11 @@ class AIStrategyAssistantApp:
         st.sidebar.subheader("🤖 Model Configuration")
         
         model_options = [
-            "openai/gpt-4o-mini",
-            "openai/gpt-4o",
-            "openai/gpt-3.5-turbo",
-            "anthropic/claude-3-haiku",
-            "anthropic/claude-3-sonnet"
+            "moonshotai/kimi-k2:free",
+            "openai/gpt-oss-20b:free",
+            "mistralai/mistral-small-3.2-24b-instruct:free",
+            "qwen/qwen2.5-vl-72b-instruct:free",
+            "tencent/hunyuan-a13b-instruct:free"
         ]
         
         selected_model = st.sidebar.selectbox(
@@ -278,17 +282,19 @@ class AIStrategyAssistantApp:
         with col2:
             st.metric(
                 "Current Phase",
-                phases[current_phase_idx][1],
-                delta=phases[current_phase_idx][2]
+                phases[current_phase_idx][1]
             )
         
         with col3:
             if state.session_id:
                 st.metric(
                     "Session",
-                    state.session_id[:8] + "...",
-                    delta=f"Started {state.created_at.strftime('%H:%M')}" if state.created_at else "Active"
+                    state.session_id[:8] + "..."
                 )
+                if state.created_at:
+                    st.caption(f"Started {state.created_at.strftime('%H:%M')}")
+                else:
+                    st.caption("Active")
     
     def render_user_input_section(self):
         """
@@ -509,18 +515,41 @@ class AIStrategyAssistantApp:
             st.markdown("---")
             st.subheader("🔍 Market Research Summary")
             
-            successful_research = [r for r in state.research_data if r.get('success', True)]
+            successful_research = [r for r in state.research_data if r.get('success', True) and r.get('title') != 'Research Unavailable']
             
             if successful_research:
                 st.success(f"✅ Analyzed {len(successful_research)} market sources")
                 
                 with st.expander("📊 Research Sources"):
-                    for research in successful_research[:5]:  # Show first 5
-                        st.markdown(f"**{research.get('title', 'Unknown Source')}**")
-                        st.caption(research.get('url', 'No URL'))
-                        if research.get('content'):
-                            st.markdown(research['content'][:200] + "...")
-                        st.markdown("---")
+                    for i, research in enumerate(successful_research[:5], 1):  # Show first 5
+                        title = research.get('title', 'Unknown Source')
+                        url = research.get('url', '')
+                        
+                        # Clean up title - remove HTML and long URLs
+                        if title.startswith('<html>'):
+                            title = f"Market Research Source {i}"
+                        elif len(title) > 100:
+                            title = title[:100] + "..."
+                        
+                        # Display source info
+                        st.markdown(f"**Source {i}: {title}**")
+                        
+                        # Show URL if it's not a search URL
+                        if url and not url.startswith('https://www.google.com/search'):
+                            st.caption(f"🔗 {url}")
+                        
+                        # Show content preview if available and not HTML
+                        content = research.get('content', '')
+                        if content and not content.startswith('<html>'):
+                            # Clean content preview
+                            clean_content = content.replace('\n', ' ').strip()
+                            if len(clean_content) > 150:
+                                clean_content = clean_content[:150] + "..."
+                            if clean_content:
+                                st.markdown(f"*{clean_content}*")
+                        
+                        if i < len(successful_research[:5]):
+                            st.markdown("---")
             else:
                 st.warning("⚠️ Market research data limited or unavailable")
     

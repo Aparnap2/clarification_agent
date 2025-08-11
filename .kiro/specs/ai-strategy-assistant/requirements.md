@@ -1,119 +1,130 @@
-# Requirements Document
+# Requirements Document: AI Strategy Assistant Evolution
 
 ## Introduction
 
-The AI Strategy Assistant is a pre-coding clarification system that enforces business process analysis (BPA) thinking and product mindset from day one. It addresses the core problem of developers jumping straight into coding without proper business analysis, resulting in feature-heavy products without market validation, technical debt from unclear requirements, projects that never become sustainable products, and lack of go-to-market strategy integration.
+The AI Strategy Assistant is a business-first development tool that validates project ideas before code is written. Currently implemented as a Streamlit application with LangGraph orchestration, this spec outlines the evolution toward a comprehensive platform that combines business validation with requirements clarification capabilities.
 
-The system combines multi-agent orchestration using LangGraph, web research capabilities via Crawl4AI, robust data validation with Pydantic, and an interactive Streamlit interface to guide developers through a structured business-first development approach.
+**Current State**: Working Streamlit app with business validation, BPA agent, and session management
+**Target State**: Full-featured platform with FastAPI backend, advanced persistence, and integrated clarification workflows
 
 ## Requirements
 
-### Requirement 1
+### Requirement 1: Business Validation Core (Currently Implemented)
 
-**User Story:** As a developer, I want to input my project idea and receive structured business validation questions, so that I can validate the market viability before writing any code.
-
-#### Acceptance Criteria
-
-1. WHEN a user inputs a project description THEN the system SHALL generate 5-8 clarifying questions about problem severity, market size, existing solutions, and target customers
-2. WHEN the system analyzes a problem statement THEN it SHALL provide a market viability score from 1-10 with detailed reasoning
-3. WHEN the viability score is below 7 THEN the system SHALL recommend stopping development and provide alternative approaches
-4. WHEN the user completes business validation THEN the system SHALL store the validation results for future reference
-
-### Requirement 2
-
-**User Story:** As a product manager, I want the system to generate detailed client personas and business models, so that I can understand my target market and value proposition clearly.
+**User Story:** As a product manager, I want to validate my project idea through structured business analysis, so that I can avoid building products that won't succeed in the market.
 
 #### Acceptance Criteria
 
-1. WHEN business validation is complete THEN the system SHALL generate a detailed client profile including industry, company size, pain points, and goals
-2. WHEN creating a business model THEN the system SHALL include value proposition (max 20 words), target customer, revenue streams, cost structure, and key metrics
-3. WHEN the value proposition exceeds 20 words THEN the system SHALL reject it and request a more concise version
-4. WHEN a client profile is generated THEN it SHALL be validated against the original problem statement for consistency
+1. WHEN a user submits a project description THEN the system SHALL score business viability on a 1-10 scale across problem severity, market size, and solution fit
+2. WHEN the overall score is below 7.0 THEN the system SHALL prevent development progression and provide rejection report
+3. WHEN validation passes THEN the system SHALL generate business model with value proposition, target customer, and revenue streams
+4. GIVEN a validated project WHEN competitive analysis runs THEN the system SHALL identify market gaps and differentiation opportunities
+5. WHEN MVP features are generated THEN the system SHALL prioritize using impact/effort matrix with maximum 3 CORE features
 
-### Requirement 3
+### Requirement 2: Requirements Clarification Integration (New)
 
-**User Story:** As a startup founder, I want the system to conduct automated market research using web crawling, so that I can understand the competitive landscape and market opportunities.
-
-#### Acceptance Criteria
-
-1. WHEN market research is initiated THEN the system SHALL crawl relevant industry websites and competitor sites using Crawl4AI
-2. WHEN web crawling is performed THEN the system SHALL extract structured data including competitor analysis, market trends, and pricing information
-3. WHEN research data is collected THEN it SHALL be processed and summarized into actionable insights
-4. WHEN crawling fails for a URL THEN the system SHALL log the error and continue with other sources without stopping the workflow
-
-### Requirement 4
-
-**User Story:** As a developer, I want the system to generate MVP feature specifications with effort estimates and business impact ratings, so that I can prioritize development work effectively.
+**User Story:** As a business analyst, I want to upload PRD drafts and get targeted clarification questions, so that I can eliminate ambiguity before development starts.
 
 #### Acceptance Criteria
 
-1. WHEN MVP planning begins THEN the system SHALL generate 5-8 feature specifications following proper user story format
-2. WHEN creating feature specs THEN each SHALL include effort estimate (XS, S, M, L, XL), business impact (Low, Medium, High, Critical), and MVP priority (Core, Important, Future)
-3. WHEN prioritizing features THEN only 2-3 features SHALL be marked as Core priority for the MVP
-4. WHEN feature specifications are complete THEN they SHALL include at least 3 specific acceptance criteria each
+1. WHEN a user uploads a requirements document THEN the system SHALL extract entities, actors, and functional requirements
+2. WHEN analysis completes THEN the system SHALL generate prioritized clarification questions with categories and rationales
+3. WHEN gaps are identified THEN the system SHALL categorize as functional, non-functional, data, integration, or compliance gaps
+4. GIVEN vague terms (TBD, scalable, fast) WHEN detected THEN the system SHALL flag for clarification
+5. WHEN user answers questions THEN the system SHALL update state and re-prioritize remaining questions
 
-### Requirement 5
+### Requirement 3: Advanced Persistence and State Management (Enhancement)
 
-**User Story:** As a business strategist, I want the system to develop comprehensive go-to-market strategies, so that I can plan the product launch and customer acquisition effectively.
-
-#### Acceptance Criteria
-
-1. WHEN GTM strategy development begins THEN the system SHALL identify 3-5 specific distribution channels with rationale
-2. WHEN developing pricing strategy THEN it SHALL be based on competitive analysis and target customer budget constraints
-3. WHEN creating launch timeline THEN it SHALL include specific milestones and success metrics
-4. WHEN GTM strategy is complete THEN it SHALL include competitive positioning and budget requirements
-
-### Requirement 6
-
-**User Story:** As a product owner, I want an interactive Streamlit interface with visual planning tools, so that I can easily navigate through the business validation and planning process.
+**User Story:** As a system user, I want my analysis sessions to persist reliably with full history, so that I can resume work and audit decisions over time.
 
 #### Acceptance Criteria
 
-1. WHEN the user accesses the interface THEN it SHALL display a business validation section with problem statement input and target customer fields
-2. WHEN features are planned THEN the system SHALL display an impact vs effort matrix visualization using Plotly
-3. WHEN viewing feature specifications THEN they SHALL be organized into expandable sections for Core MVP and Future features
-4. WHEN GTM strategy is complete THEN it SHALL be displayed with metrics, channels, and pricing in a structured layout
+1. WHEN a session is created THEN the system SHALL use SQLite checkpointer for LangGraph state persistence
+2. WHEN state changes occur THEN the system SHALL create versioned checkpoints with rollback capability
+3. WHEN user requests history THEN the system SHALL display checkpoint timeline with state snapshots
+4. GIVEN optional knowledge graph WHEN enabled THEN the system SHALL store entities and relationships in Neo4j via Graphiti
+5. WHEN cross-document analysis is needed THEN the system SHALL query knowledge graph for related insights
 
-### Requirement 7
+### Requirement 4: Web Research and Context Enhancement (Enhancement)
 
-**User Story:** As a development team lead, I want the system to create a 3-phase product roadmap with specific success criteria, so that I can transition from project mindset to product mindset.
-
-#### Acceptance Criteria
-
-1. WHEN roadmap creation begins THEN the system SHALL generate Phase 1 (MVP Launch, 8-12 weeks), Phase 2 (Product Growth, 3-6 months), and Phase 3 (Market Expansion, 6-12 months)
-2. WHEN each phase is defined THEN it SHALL include specific features, success criteria, and key learnings
-3. WHEN Phase 1 is complete THEN success criteria SHALL include "10 paying customers" and "Product-market fit signals"
-4. WHEN the roadmap is finalized THEN it SHALL provide an execution checklist with 10+ validation items
-
-### Requirement 8
-
-**User Story:** As a system administrator, I want the system to maintain persistent memory and state management, so that user sessions and analysis results are preserved across interactions.
+**User Story:** As an analyst, I want the system to automatically gather market context from web sources, so that my business validation is grounded in current market data.
 
 #### Acceptance Criteria
 
-1. WHEN a user session begins THEN the system SHALL create a unique session ID and initialize ProductState
-2. WHEN analysis is performed THEN all state changes SHALL be persisted to graph memory using pickle serialization
-3. WHEN a user returns to a previous session THEN the system SHALL restore the complete state including business model, features, and research data
-4. WHEN memory operations fail THEN the system SHALL handle errors gracefully and continue with in-memory state
+1. WHEN URLs are provided THEN the system SHALL use Crawl4AI to extract structured content
+2. WHEN competitive analysis runs THEN the system SHALL automatically research competitor websites and documentation
+3. WHEN market validation occurs THEN the system SHALL incorporate web research findings into scoring rationale
+4. GIVEN crawl failures WHEN they occur THEN the system SHALL continue with limited data and log errors
+5. WHEN research completes THEN the system SHALL cache results with configurable TTL
 
-### Requirement 9
+### Requirement 5: API-First Architecture (New)
 
-**User Story:** As a quality assurance engineer, I want the system to validate all data inputs using Pydantic models, so that data integrity is maintained throughout the workflow.
-
-#### Acceptance Criteria
-
-1. WHEN any data is processed THEN it SHALL be validated against corresponding Pydantic models (BusinessModel, FeatureSpec, GTMStrategy, etc.)
-2. WHEN validation fails THEN the system SHALL provide specific error messages indicating which fields are invalid
-3. WHEN creating FeatureSpec objects THEN all required fields (name, user_story, acceptance_criteria, mvp_priority, effort_estimate, business_impact) SHALL be validated
-4. WHEN data models are updated THEN backward compatibility SHALL be maintained for existing stored sessions
-
-### Requirement 10
-
-**User Story:** As a technical architect, I want the system to use LangGraph for orchestrating multi-agent workflows, so that the business analysis process follows a structured and reliable sequence.
+**User Story:** As a developer, I want a FastAPI backend with structured endpoints, so that I can integrate the system with other tools and build custom interfaces.
 
 #### Acceptance Criteria
 
-1. WHEN the workflow starts THEN it SHALL follow the sequence: problem_validation → business_analysis → market_research → mvp_planning → technical_architecture → gtm_strategy → execution_roadmap
-2. WHEN problem validation score is below 7 THEN the workflow SHALL branch to rejection_report instead of continuing
-3. WHEN any node fails THEN the system SHALL provide error handling and allow workflow recovery
-4. WHEN the workflow completes THEN it SHALL reach the END state with all required artifacts generated
+1. WHEN the system starts THEN it SHALL expose FastAPI endpoints for threads, analysis, crawling, and graph queries
+2. WHEN API calls are made THEN the system SHALL enforce typed responses using PydanticAI schemas
+3. WHEN errors occur THEN the system SHALL return structured error responses with request IDs and debugging information
+4. GIVEN concurrent requests WHEN they arrive THEN the system SHALL handle them asynchronously with proper resource management
+5. WHEN authentication is required THEN the system SHALL support API key-based authentication with rate limiting
+
+### Requirement 6: Enhanced Agent Architecture (Enhancement)
+
+**User Story:** As a system architect, I want modular agents with clear responsibilities, so that the system is maintainable and extensible.
+
+#### Acceptance Criteria
+
+1. WHEN workflow executes THEN BPA Agent SHALL handle business validation with structured scoring
+2. WHEN clarification is needed THEN Clarification Agent SHALL generate targeted questions using heuristics and LLM analysis
+3. WHEN market research runs THEN Web Research Agent SHALL coordinate crawling and data extraction
+4. WHEN GTM strategy develops THEN GTM Agent SHALL create distribution channels, pricing, and launch timeline
+5. WHEN agents communicate THEN they SHALL use typed Pydantic models for all data exchange
+
+### Requirement 7: Multi-Modal Interface Support (Enhancement)
+
+**User Story:** As a user, I want both web UI and API access, so that I can use the system in different contexts and integrate with my existing workflow.
+
+#### Acceptance Criteria
+
+1. WHEN using web interface THEN Streamlit SHALL provide interactive forms, visualizations, and session management
+2. WHEN using API THEN FastAPI SHALL provide complete functionality with OpenAPI documentation
+3. WHEN switching between interfaces THEN session state SHALL remain consistent across both access methods
+4. GIVEN long-running operations WHEN they execute THEN both interfaces SHALL provide progress tracking and cancellation
+5. WHEN errors occur THEN both interfaces SHALL display user-friendly error messages with technical details available
+
+### Requirement 8: Observability and Monitoring (New)
+
+**User Story:** As a system administrator, I want comprehensive logging and monitoring, so that I can troubleshoot issues and optimize performance.
+
+#### Acceptance Criteria
+
+1. WHEN operations execute THEN the system SHALL log with structured format including request IDs and timing
+2. WHEN LLM calls are made THEN the system SHALL track model usage, costs, and response times
+3. WHEN errors occur THEN the system SHALL capture full stack traces with context information
+4. GIVEN performance metrics WHEN collected THEN the system SHALL expose them via monitoring endpoints
+5. WHEN system health is checked THEN endpoints SHALL report component status and dependencies
+
+### Requirement 9: Configuration and Deployment (Enhancement)
+
+**User Story:** As a DevOps engineer, I want flexible configuration and deployment options, so that I can run the system in different environments.
+
+#### Acceptance Criteria
+
+1. WHEN system starts THEN it SHALL load configuration from environment variables and config files
+2. WHEN deploying locally THEN the system SHALL use SQLite and optional local Neo4j
+3. WHEN deploying to production THEN the system SHALL support PostgreSQL checkpointer and managed Neo4j
+4. GIVEN containerization WHEN needed THEN the system SHALL provide Docker configurations for all components
+5. WHEN scaling is required THEN the system SHALL support horizontal scaling of API components
+
+### Requirement 10: Data Privacy and Security (New)
+
+**User Story:** As a compliance officer, I want data privacy controls and security measures, so that sensitive business information is protected.
+
+#### Acceptance Criteria
+
+1. WHEN processing documents THEN the system SHALL redact PII and sensitive information automatically
+2. WHEN storing data THEN the system SHALL encrypt sensitive fields and provide data retention controls
+3. WHEN API access occurs THEN the system SHALL validate API keys and enforce rate limiting
+4. GIVEN local mode WHEN enabled THEN the system SHALL operate without external API calls
+5. WHEN data export is requested THEN the system SHALL provide structured export with privacy controls

@@ -169,23 +169,42 @@ class BPAAgent:
                 max_tokens=1500
             )
             
-            # Parse the JSON response
-            content = response.choices[0].message.content.strip()
+            # Parse the JSON response with better error handling
+            content = response.choices[0].message.content
+            
+            if not content or content.strip() == "":
+                logger.error("Empty response from LLM")
+                raise ValueError("Empty response from LLM")
+            
+            content = content.strip()
+            logger.debug(f"LLM response content: {content[:200]}...")
             
             # Extract JSON from response (handle potential markdown formatting)
+            json_content = None
             if "```json" in content:
                 json_start = content.find("```json") + 7
                 json_end = content.find("```", json_start)
-                json_content = content[json_start:json_end].strip()
+                if json_end > json_start:
+                    json_content = content[json_start:json_end].strip()
             elif content.startswith("{") and content.endswith("}"):
                 json_content = content
             else:
                 # Try to find JSON-like content
                 start_idx = content.find("{")
                 end_idx = content.rfind("}") + 1
-                json_content = content[start_idx:end_idx]
+                if start_idx >= 0 and end_idx > start_idx:
+                    json_content = content[start_idx:end_idx]
             
-            validation_data = json.loads(json_content)
+            if not json_content:
+                # If no JSON found, try to parse the entire content as JSON
+                json_content = content
+            
+            try:
+                validation_data = json.loads(json_content)
+            except json.JSONDecodeError as json_error:
+                logger.error(f"JSON decode error: {json_error}")
+                logger.error(f"Content that failed to parse: {content}")
+                raise ValueError(f"Invalid JSON in LLM response: {json_error}")
             
             # Calculate overall score if not provided
             if "overall_score" not in validation_data:
@@ -357,17 +376,28 @@ class BPAAgent:
             
             content = response.choices[0].message.content.strip()
             
-            # Extract JSON from response
+            # Extract JSON from response with better error handling
+            json_content = None
             if "```json" in content:
                 json_start = content.find("```json") + 7
                 json_end = content.find("```", json_start)
-                json_content = content[json_start:json_end].strip()
-            else:
+                if json_end > json_start:
+                    json_content = content[json_start:json_end].strip()
+            
+            if not json_content:
                 start_idx = content.find("{")
                 end_idx = content.rfind("}") + 1
-                json_content = content[start_idx:end_idx]
+                if start_idx >= 0 and end_idx > start_idx:
+                    json_content = content[start_idx:end_idx]
             
-            competitor_data = json.loads(json_content)
+            if not json_content:
+                raise ValueError("No valid JSON found in response")
+            
+            try:
+                competitor_data = json.loads(json_content)
+            except json.JSONDecodeError as e:
+                logger.error(f"JSON parsing failed: {e}")
+                raise ValueError(f"Invalid JSON in competitor analysis: {e}")
             
             # Create CompetitorAnalysis objects
             competitors = []

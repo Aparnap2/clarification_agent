@@ -91,18 +91,31 @@ class GraphMemory:
         logger.info(f"Generated new session ID: {session_id}")
         return session_id
     
-    def save_session(self, session_id: str, state: ProductState) -> bool:
+    def save_session(self, session_id: str, state, checkpoint_id: Optional[str] = None) -> bool:
         """
-        Save session state with versioning and metadata.
+        Save session state with versioning, metadata, and checkpoint tracking.
         
         Args:
             session_id: Unique session identifier
             state: ProductState to save
+            checkpoint_id: Optional checkpoint identifier for LangGraph integration
             
         Returns:
             True if save was successful, False otherwise
         """
         try:
+            # Handle both dict and ProductState objects
+            if isinstance(state, dict):
+                # Convert dict to ProductState for proper handling
+                try:
+                    state = ProductState(**state)
+                except Exception as conversion_error:
+                    logger.error(f"Failed to convert dict to ProductState: {conversion_error}")
+                    return False
+            elif not isinstance(state, ProductState):
+                logger.error(f"Invalid state type: {type(state)}, expected ProductState or dict")
+                return False
+            
             # Update state timestamp
             state.update_timestamp()
             
@@ -110,13 +123,18 @@ class GraphMemory:
             if not state.session_id:
                 state.session_id = session_id
             
-            # Create session data with versioning
+            # Add checkpoint_id tracking if provided
+            if checkpoint_id and checkpoint_id not in state.checkpoint_history:
+                state.checkpoint_history.append(checkpoint_id)
+            
+            # Create session data with versioning and checkpoint tracking
             session_data = {
                 'state': state.model_dump(),
                 'timestamp': datetime.now(),
-                'version': '1.0',
+                'version': state.version if hasattr(state, 'version') else '2.0',
                 'model_version': ProductState.__name__,
-                'session_id': session_id
+                'session_id': session_id,
+                'checkpoint_id': checkpoint_id
             }
             
             self.memory[session_id] = session_data
@@ -137,12 +155,13 @@ class GraphMemory:
             logger.error(f"Failed to save session {session_id}: {e}")
             return False
     
-    def load_session(self, session_id: str) -> Optional[ProductState]:
+    def load_session(self, session_id: str, checkpoint_id: Optional[str] = None) -> Optional[ProductState]:
         """
-        Load session with backward compatibility handling.
+        Load session with backward compatibility handling and checkpoint support.
         
         Args:
             session_id: Session identifier to load
+            checkpoint_id: Optional specific checkpoint to load (for future use)
             
         Returns:
             ProductState if found and valid, None otherwise
@@ -155,13 +174,18 @@ class GraphMemory:
             session_data = self.memory[session_id]
             state_data = session_data['state']
             
-            # Handle backward compatibility
+            # Handle backward compatibility for checkpoint data
             state_data = self._handle_backward_compatibility(state_data, session_data, session_id)
             
             # Create ProductState with validation
             state = ProductState(**state_data)
             
-            logger.info(f"Session {session_id} loaded successfully")
+            # Log checkpoint information if available
+            loaded_checkpoint = session_data.get('checkpoint_id')
+            if loaded_checkpoint:
+                logger.info(f"Session {session_id} loaded successfully with checkpoint {loaded_checkpoint}")
+            else:
+                logger.info(f"Session {session_id} loaded successfully")
             return state
             
         except Exception as e:
@@ -175,6 +199,7 @@ class GraphMemory:
         Args:
             state_data: Raw state data from storage
             session_data: Complete session metadata
+            session_id: Session identifier for fallback
             
         Returns:
             Updated state data compatible with current models
@@ -182,7 +207,7 @@ class GraphMemory:
         try:
             version = session_data.get('version', '1.0')
             
-            # Add missing fields with defaults
+            # Add missing fields with defaults for existing sessions
             if 'session_id' not in state_data:
                 state_data['session_id'] = session_data.get('session_id', session_id)
             
@@ -198,6 +223,32 @@ class GraphMemory:
             if 'current_phase' not in state_data:
                 state_data['current_phase'] = 'discovery'
             
+            # Add new clarification support fields for backward compatibility (v2.0)
+            if 'clarification_questions' not in state_data:
+                state_data['clarification_questions'] = []
+            
+            if 'answered_questions' not in state_data:
+                state_data['answered_questions'] = {}
+            
+            if 'gap_analysis' not in state_data:
+                state_data['gap_analysis'] = []
+            
+            if 'checkpoint_history' not in state_data:
+                state_data['checkpoint_history'] = []
+            
+            # Handle checkpoint_id from session metadata for backward compatibility
+            if 'checkpoint_id' not in state_data and session_data.get('checkpoint_id'):
+                checkpoint_id = session_data.get('checkpoint_id')
+                if checkpoint_id and checkpoint_id not in state_data['checkpoint_history']:
+                    state_data['checkpoint_history'].append(checkpoint_id)
+            
+            if 'version' not in state_data:
+                # Determine version based on presence of new fields
+                if any(field in state_data for field in ['clarification_questions', 'answered_questions', 'gap_analysis']):
+                    state_data['version'] = '2.0'
+                else:
+                    state_data['version'] = '1.0'
+            
             # Handle datetime serialization
             for field in ['created_at', 'updated_at']:
                 if field in state_data and isinstance(state_data[field], str):
@@ -206,7 +257,22 @@ class GraphMemory:
                     except ValueError:
                         state_data[field] = datetime.now()
             
-            logger.debug(f"Applied backward compatibility for version {version}")
+            # Validate and clean up clarification data if present
+            if 'clarification_questions' in state_data and state_data['clarification_questions']:
+                # Ensure clarification questions are properly formatted
+                valid_questions = []
+                for question in state_data['clarification_questions']:
+                    if isinstance(question, dict) and 'id' in question and 'text' in question:
+                        valid_questions.append(question)
+                state_data['clarification_questions'] = valid_questions
+            
+            # Validate answered_questions format
+            if 'answered_questions' in state_data and state_data['answered_questions']:
+                if not isinstance(state_data['answered_questions'], dict):
+                    logger.warning(f"Invalid answered_questions format in session {session_id}, resetting to empty dict")
+                    state_data['answered_questions'] = {}
+            
+            logger.debug(f"Applied backward compatibility for version {version} -> {state_data.get('version', '2.0')}")
             return state_data
             
         except Exception as e:
@@ -251,7 +317,9 @@ class GraphMemory:
                     'timestamp': session_data.get('timestamp'),
                     'version': session_data.get('version'),
                     'current_phase': session_data.get('state', {}).get('current_phase', 'unknown'),
-                    'user_query': session_data.get('state', {}).get('user_query', 'No query')[:100] + '...' if len(session_data.get('state', {}).get('user_query', '')) > 100 else session_data.get('state', {}).get('user_query', 'No query')
+                    'user_query': session_data.get('state', {}).get('user_query', 'No query')[:100] + '...' if len(session_data.get('state', {}).get('user_query', '')) > 100 else session_data.get('state', {}).get('user_query', 'No query'),
+                    'checkpoint_id': session_data.get('checkpoint_id'),
+                    'checkpoint_count': len(session_data.get('state', {}).get('checkpoint_history', []))
                 }
             
             logger.debug(f"Listed {len(session_list)} sessions")

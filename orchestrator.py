@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from langgraph.graph import StateGraph, END
-from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.sqlite import SqliteSaver
 
 from models.data_models import ProductState
 from agents.bpa_agent import BPAAgent
@@ -15,9 +15,43 @@ from agents.gtm_strategy_agent import GTMStrategyAgent
 from agents.web_research_agent import WebResearchAgent
 from agents.product_transition_agent import ProductTransitionAgent
 from memory.graph_memory import GraphMemory
+from utils.error_handler import ErrorHandler, ErrorType
 
-# Configure logging
+# Configure structured logging with enhanced format and error tracking
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - [%(funcName)s:%(lineno)d] - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler('orchestrator.log', mode='a'),
+        logging.FileHandler('orchestrator_errors.log', mode='a', level=logging.ERROR)
+    ]
+)
+
+# Create logger with structured context
 logger = logging.getLogger(__name__)
+
+# Add custom formatter for structured logging
+class StructuredFormatter(logging.Formatter):
+    """Custom formatter for structured logging with workflow context."""
+    
+    def format(self, record):
+        # Add workflow context if available
+        if hasattr(record, 'session_id'):
+            record.msg = f"[session:{record.session_id}] {record.msg}"
+        if hasattr(record, 'node_name'):
+            record.msg = f"[node:{record.node_name}] {record.msg}"
+        if hasattr(record, 'request_id'):
+            record.msg = f"[req:{record.request_id}] {record.msg}"
+        
+        return super().format(record)
+
+# Apply structured formatter to handlers
+structured_formatter = StructuredFormatter(
+    '%(asctime)s - %(name)s - %(levelname)s - [%(funcName)s:%(lineno)d] - %(message)s'
+)
+for handler in logger.handlers:
+    handler.setFormatter(structured_formatter)
 
 
 class ProductDevelopmentOrchestrator:
@@ -28,16 +62,20 @@ class ProductDevelopmentOrchestrator:
     to ensure business-first development approach.
     """
     
-    def __init__(self, api_key: Optional[str] = None, model: str = "openai/gpt-4o-mini"):
+    def __init__(self, api_key: Optional[str] = None, model: str = "openai/gpt-4o-mini", enable_debug: bool = False):
         """
         Initialize the orchestrator with agents and workflow.
         
         Args:
             api_key: OpenAI API key (if None, will use environment variable)
             model: LLM model to use for all agents
+            enable_debug: Whether to enable debug mode for error handling
         """
         self.api_key = api_key or os.getenv("OPENAI_API_KEY")
         self.model = model
+        
+        # Initialize error handler
+        self.error_handler = ErrorHandler(enable_debug=enable_debug)
         
         # Initialize agents
         self.bpa_agent = BPAAgent(api_key=self.api_key, model=self.model)
@@ -50,7 +88,7 @@ class ProductDevelopmentOrchestrator:
         # Build the workflow graph
         self.graph = self._build_product_graph()
         
-        logger.info("ProductDevelopmentOrchestrator initialized")
+        logger.info(f"ProductDevelopmentOrchestrator initialized with model: {model}, debug: {enable_debug}")
     
     def _build_product_graph(self) -> StateGraph:
         """
@@ -100,8 +138,8 @@ class ProductDevelopmentOrchestrator:
         workflow.add_edge("execution_roadmap", END)
         workflow.add_edge("rejection_report", END)
         
-        # Compile with memory checkpointer
-        checkpointer = MemorySaver()
+        # Compile with SQLite checkpointer
+        checkpointer = SqliteSaver("checkpoints.db")
         compiled_graph = workflow.compile(checkpointer=checkpointer)
         
         logger.info("Product development workflow graph compiled successfully")
@@ -109,7 +147,7 @@ class ProductDevelopmentOrchestrator:
     
     async def execute_workflow(self, user_query: str, session_id: Optional[str] = None) -> ProductState:
         """
-        Execute the complete product development workflow.
+        Execute the complete product development workflow with enhanced error handling.
         
         Args:
             user_query: User's project description/query
@@ -120,12 +158,16 @@ class ProductDevelopmentOrchestrator:
             
         Requirements: 10.1, 10.4 (error handling and workflow recovery)
         """
-        logger.info(f"Starting workflow execution for query: {user_query[:100]}...")
+        # Create structured logging context
+        workflow_start_time = datetime.now()
+        logger.info(f"Starting workflow execution for query: {user_query[:100]}...", 
+                   extra={'session_id': session_id, 'workflow_start': workflow_start_time.isoformat()})
         
         try:
             # Generate session ID if not provided
             if not session_id:
                 session_id = self.memory.generate_session_id()
+                logger.info(f"Generated new session ID: {session_id}", extra={'session_id': session_id})
             
             # Create initial state
             initial_state = ProductState(
@@ -134,59 +176,141 @@ class ProductDevelopmentOrchestrator:
                 current_phase="discovery"
             )
             
-            # Save initial state
-            self.memory.save_session(session_id, initial_state)
+            logger.info("Initial state created", extra={'session_id': session_id, 'phase': 'discovery'})
             
-            # Execute workflow with error recovery
+            # Save initial state with error handling
+            try:
+                self.memory.save_session(session_id, initial_state)
+            except Exception as save_error:
+                error_response = await self.error_handler.handle_persistence_error(
+                    save_error, "save", session_id
+                )
+                logger.warning(f"Initial state save failed [{error_response.request_id}]: {error_response.message}")
+                # Continue with in-memory state
+            
+            # Execute workflow with enhanced error recovery
             config = {"configurable": {"thread_id": session_id}}
             
             try:
-                # Run the workflow
+                # Run the workflow with thread_id for SQLite checkpointer
                 final_state = await self.graph.ainvoke(initial_state, config=config)
                 
-                # Save final state
-                self.memory.save_session(session_id, final_state)
+                # Save final state with error handling
+                try:
+                    self.memory.save_session(session_id, final_state)
+                    logger.info("Final state saved successfully", 
+                               extra={'session_id': session_id, 'phase': final_state.current_phase})
+                except Exception as save_error:
+                    error_response = await self.error_handler.handle_persistence_error(
+                        save_error, "save", session_id
+                    )
+                    logger.warning(f"Final state save failed [{error_response.request_id}]: {error_response.message}",
+                                 extra={'session_id': session_id, 'request_id': error_response.request_id})
+                    # Add error info to state but continue
+                    final_state.market_validation["save_error"] = error_response.message
+                    final_state.market_validation["save_error_timestamp"] = datetime.now().isoformat()
                 
-                logger.info(f"Workflow completed successfully for session {session_id}")
+                # Log workflow completion metrics
+                workflow_duration = (datetime.now() - workflow_start_time).total_seconds()
+                logger.info(f"Workflow completed successfully for session {session_id}",
+                           extra={
+                               'session_id': session_id, 
+                               'workflow_duration_seconds': workflow_duration,
+                               'final_phase': final_state.current_phase,
+                               'feature_count': len(final_state.feature_specifications),
+                               'validation_score': final_state.market_validation.get("overall_score", "N/A")
+                           })
                 return final_state
                 
             except Exception as workflow_error:
-                logger.error(f"Workflow execution failed: {workflow_error}")
+                # Handle workflow error with structured error handling
+                error_response = await self.error_handler.handle_workflow_error(
+                    workflow_error, session_id, state=initial_state
+                )
+                
+                logger.error(f"Workflow execution failed [{error_response.request_id}]: {error_response.message}")
+                self.error_handler.log_error_metrics(error_response)
                 
                 # Attempt recovery by loading last known good state
-                recovered_state = self.memory.load_session(session_id)
-                if recovered_state:
-                    # Add error information to state
-                    recovered_state.market_validation["workflow_error"] = str(workflow_error)
-                    recovered_state.market_validation["workflow_error_timestamp"] = datetime.now().isoformat()
-                    recovered_state.update_timestamp()
-                    
-                    # Save recovered state
-                    self.memory.save_session(session_id, recovered_state)
-                    
-                    logger.info(f"Workflow recovered to last known state for session {session_id}")
-                    return recovered_state
-                else:
-                    # Return initial state with error information
-                    initial_state.market_validation["workflow_error"] = str(workflow_error)
-                    initial_state.market_validation["workflow_error_timestamp"] = datetime.now().isoformat()
+                try:
+                    recovered_state = self.memory.load_session(session_id)
+                    if recovered_state:
+                        # Add structured error information to state
+                        recovered_state.market_validation.update({
+                            "workflow_error": error_response.message,
+                            "workflow_error_timestamp": error_response.timestamp.isoformat(),
+                            "workflow_error_id": error_response.request_id,
+                            "recovery_suggestions": error_response.recovery_suggestions
+                        })
+                        recovered_state.update_timestamp()
+                        
+                        # Save recovered state
+                        try:
+                            self.memory.save_session(session_id, recovered_state)
+                        except Exception as save_error:
+                            logger.warning(f"Failed to save recovered state: {save_error}")
+                        
+                        logger.info(f"Workflow recovered to last known state for session {session_id}")
+                        return recovered_state
+                    else:
+                        # Return initial state with error information
+                        initial_state.market_validation.update({
+                            "workflow_error": error_response.message,
+                            "workflow_error_timestamp": error_response.timestamp.isoformat(),
+                            "workflow_error_id": error_response.request_id,
+                            "recovery_suggestions": error_response.recovery_suggestions
+                        })
+                        return initial_state
+                        
+                except Exception as recovery_error:
+                    logger.error(f"State recovery failed: {recovery_error}")
+                    # Return initial state with both errors
+                    initial_state.market_validation.update({
+                        "workflow_error": error_response.message,
+                        "recovery_error": str(recovery_error),
+                        "workflow_error_timestamp": error_response.timestamp.isoformat(),
+                        "workflow_error_id": error_response.request_id
+                    })
                     return initial_state
                     
         except Exception as e:
             logger.error(f"Critical workflow failure: {e}")
-            # Return minimal error state
-            error_state = ProductState(
-                user_query=user_query,
-                session_id=session_id or "error",
-                current_phase="discovery"
-            )
-            error_state.market_validation["critical_error"] = str(e)
-            error_state.market_validation["critical_error_timestamp"] = datetime.now().isoformat()
-            return error_state
+            # Create structured error response for critical failures
+            try:
+                error_response = await self.error_handler.handle_workflow_error(
+                    e, session_id or "unknown", state=None
+                )
+                self.error_handler.log_error_metrics(error_response)
+                
+                # Return minimal error state with structured error info
+                error_state = ProductState(
+                    user_query=user_query,
+                    session_id=session_id or "error",
+                    current_phase="discovery"
+                )
+                error_state.market_validation.update({
+                    "critical_error": error_response.message,
+                    "critical_error_timestamp": error_response.timestamp.isoformat(),
+                    "critical_error_id": error_response.request_id,
+                    "recovery_suggestions": error_response.recovery_suggestions
+                })
+                return error_state
+                
+            except Exception as handler_error:
+                logger.error(f"Error handler failed: {handler_error}")
+                # Fallback to basic error state
+                error_state = ProductState(
+                    user_query=user_query,
+                    session_id=session_id or "error",
+                    current_phase="discovery"
+                )
+                error_state.market_validation["critical_error"] = str(e)
+                error_state.market_validation["critical_error_timestamp"] = datetime.now().isoformat()
+                return error_state
     
     async def _problem_validation_node(self, state: ProductState) -> ProductState:
         """
-        Problem validation node - validates business viability.
+        Problem validation node - validates business viability with enhanced error handling.
         
         Args:
             state: Current workflow state
@@ -196,30 +320,61 @@ class ProductDevelopmentOrchestrator:
             
         Requirements: 1.1, 1.3 (validation gates)
         """
-        logger.info("Executing problem validation node")
+        logger.info("Executing problem validation node", 
+                   extra={'session_id': state.session_id, 'node_name': 'problem_validation'})
         
         try:
             # Use BPA agent for problem validation
+            logger.debug("Starting BPA agent analysis", 
+                        extra={'session_id': state.session_id, 'node_name': 'problem_validation'})
             updated_state = await self.bpa_agent.analyze_business_viability(state)
             
-            # Save intermediate state
+            # Save intermediate state with error handling
             if updated_state.session_id:
-                self.memory.save_session(updated_state.session_id, updated_state)
+                try:
+                    self.memory.save_session(updated_state.session_id, updated_state)
+                except Exception as save_error:
+                    error_response = await self.error_handler.handle_persistence_error(
+                        save_error, "save", updated_state.session_id
+                    )
+                    logger.warning(f"State save failed in problem validation [{error_response.request_id}]: {error_response.message}")
+                    # Continue without failing the node
             
-            logger.info("Problem validation completed")
+            logger.info("Problem validation completed", 
+                       extra={
+                           'session_id': updated_state.session_id, 
+                           'node_name': 'problem_validation',
+                           'validation_score': updated_state.market_validation.get("overall_score", "N/A"),
+                           'should_continue': updated_state.market_validation.get("should_continue", False)
+                       })
             return updated_state
             
         except Exception as e:
-            logger.error(f"Problem validation node failed: {e}")
-            # Add error to state but continue workflow
-            state.market_validation["problem_validation_error"] = str(e)
-            state.market_validation["problem_validation_error_timestamp"] = datetime.now().isoformat()
+            # Handle error with structured error handling
+            error_response = await self.error_handler.handle_workflow_error(
+                e, state.session_id or "unknown", "problem_validation", state
+            )
+            
+            logger.error(f"Problem validation node failed [{error_response.request_id}]: {error_response.message}")
+            self.error_handler.log_error_metrics(error_response)
+            
+            # Use fallback response for problem validation
+            fallback_data = self.error_handler.create_fallback_response("problem_validation", {})
+            
+            # Add structured error and fallback to state
+            state.market_validation.update({
+                "problem_validation_error": error_response.message,
+                "problem_validation_error_timestamp": error_response.timestamp.isoformat(),
+                "problem_validation_error_id": error_response.request_id,
+                "recovery_suggestions": error_response.recovery_suggestions,
+                **fallback_data
+            })
             state.update_timestamp()
             return state
     
     async def _business_analysis_node(self, state: ProductState) -> ProductState:
         """
-        Business analysis node - already handled by BPA agent in problem validation.
+        Business analysis node with enhanced error handling.
         
         Args:
             state: Current workflow state
@@ -227,7 +382,8 @@ class ProductDevelopmentOrchestrator:
         Returns:
             State with business analysis completed
         """
-        logger.info("Executing business analysis node")
+        logger.info("Executing business analysis node", 
+                   extra={'session_id': state.session_id, 'node_name': 'business_analysis'})
         
         try:
             # Business analysis is already done in problem validation
@@ -235,29 +391,67 @@ class ProductDevelopmentOrchestrator:
             
             if not state.business_model:
                 logger.warning("Business model not found, re-running BPA agent")
-                state = await self.bpa_agent.analyze_business_viability(state)
+                try:
+                    state = await self.bpa_agent.analyze_business_viability(state)
+                except Exception as bpa_error:
+                    error_response = await self.error_handler.handle_workflow_error(
+                        bpa_error, state.session_id or "unknown", "business_analysis_bpa_retry", state
+                    )
+                    logger.error(f"BPA agent retry failed [{error_response.request_id}]: {error_response.message}")
+                    
+                    # Use fallback business model
+                    fallback_data = self.error_handler.create_fallback_response("business_model", {})
+                    state.market_validation.update({
+                        "bpa_retry_error": error_response.message,
+                        "bpa_retry_error_id": error_response.request_id,
+                        "business_model_fallback": fallback_data
+                    })
             
             # Update phase
             state.current_phase = "validation"
             state.update_timestamp()
             
-            # Save state
+            # Save state with error handling
             if state.session_id:
-                self.memory.save_session(state.session_id, state)
+                try:
+                    self.memory.save_session(state.session_id, state)
+                except Exception as save_error:
+                    error_response = await self.error_handler.handle_persistence_error(
+                        save_error, "save", state.session_id
+                    )
+                    logger.warning(f"State save failed in business analysis [{error_response.request_id}]: {error_response.message}")
             
-            logger.info("Business analysis completed")
+            logger.info("Business analysis completed", 
+                       extra={
+                           'session_id': state.session_id, 
+                           'node_name': 'business_analysis',
+                           'phase': state.current_phase,
+                           'has_business_model': state.business_model is not None
+                       })
             return state
             
         except Exception as e:
-            logger.error(f"Business analysis node failed: {e}")
-            state.market_validation["business_analysis_error"] = str(e)
-            state.market_validation["business_analysis_error_timestamp"] = datetime.now().isoformat()
+            # Handle error with structured error handling
+            error_response = await self.error_handler.handle_workflow_error(
+                e, state.session_id or "unknown", "business_analysis", state
+            )
+            
+            logger.error(f"Business analysis node failed [{error_response.request_id}]: {error_response.message}")
+            self.error_handler.log_error_metrics(error_response)
+            
+            # Add structured error to state
+            state.market_validation.update({
+                "business_analysis_error": error_response.message,
+                "business_analysis_error_timestamp": error_response.timestamp.isoformat(),
+                "business_analysis_error_id": error_response.request_id,
+                "recovery_suggestions": error_response.recovery_suggestions
+            })
             state.update_timestamp()
             return state
     
     async def _market_research_node(self, state: ProductState) -> ProductState:
         """
-        Market research node - conducts web research for competitive analysis.
+        Market research node with enhanced error handling.
         
         Args:
             state: Current workflow state
@@ -267,7 +461,8 @@ class ProductDevelopmentOrchestrator:
             
         Requirements: 3.1, 3.2, 3.3, 3.4 (error handling)
         """
-        logger.info("Executing market research node")
+        logger.info("Executing market research node", 
+                   extra={'session_id': state.session_id, 'node_name': 'market_research'})
         
         try:
             # Conduct web research using WebResearchAgent
@@ -275,35 +470,85 @@ class ProductDevelopmentOrchestrator:
                 # Generate research query based on business model
                 research_query = self._generate_research_query(state)
                 
-                # Conduct research
-                research_results = await research_agent.research_topic(research_query)
+                # Conduct research with error handling
+                try:
+                    research_results = await research_agent.research_topic(research_query)
+                    
+                    # Update state with research data
+                    state.research_data = research_results
+                    state.current_phase = "planning"
+                    state.update_timestamp()
+                    
+                    logger.info(f"Market research completed with {len(research_results)} results",
+                               extra={
+                                   'session_id': state.session_id, 
+                                   'node_name': 'market_research',
+                                   'research_count': len(research_results),
+                                   'phase': state.current_phase
+                               })
+                    
+                except Exception as research_error:
+                    # Handle research-specific errors
+                    error_response = await self.error_handler.handle_workflow_error(
+                        research_error, state.session_id or "unknown", "market_research_web", state
+                    )
+                    
+                    logger.warning(f"Web research failed [{error_response.request_id}]: {error_response.message}")
+                    
+                    # Continue with fallback research data
+                    state.research_data = [{
+                        "url": "fallback",
+                        "title": "Research Unavailable",
+                        "content": f"Market research failed: {error_response.message}",
+                        "timestamp": datetime.now().isoformat(),
+                        "success": False,
+                        "error_message": error_response.message,
+                        "error_id": error_response.request_id,
+                        "metadata": {"fallback": True, "recovery_suggestions": error_response.recovery_suggestions}
+                    }]
+                    state.current_phase = "planning"
+                    state.update_timestamp()
                 
-                # Update state with research data
-                state.research_data = research_results
-                state.current_phase = "planning"
-                state.update_timestamp()
-                
-                # Save state
+                # Save state with error handling
                 if state.session_id:
-                    self.memory.save_session(state.session_id, state)
+                    try:
+                        self.memory.save_session(state.session_id, state)
+                    except Exception as save_error:
+                        error_response = await self.error_handler.handle_persistence_error(
+                            save_error, "save", state.session_id
+                        )
+                        logger.warning(f"State save failed in market research [{error_response.request_id}]: {error_response.message}")
                 
-                logger.info(f"Market research completed with {len(research_results)} results")
                 return state
                 
         except Exception as e:
-            logger.error(f"Market research node failed: {e}")
-            # Continue with limited research data
+            # Handle node-level errors
+            error_response = await self.error_handler.handle_workflow_error(
+                e, state.session_id or "unknown", "market_research", state
+            )
+            
+            logger.error(f"Market research node failed [{error_response.request_id}]: {error_response.message}")
+            self.error_handler.log_error_metrics(error_response)
+            
+            # Continue with fallback research data
             state.research_data = [{
                 "url": "error",
                 "title": "Research Failed",
-                "content": f"Market research failed: {str(e)}",
+                "content": f"Market research failed: {error_response.message}",
                 "timestamp": datetime.now().isoformat(),
                 "success": False,
-                "error_message": str(e),
-                "metadata": {"fallback": True}
+                "error_message": error_response.message,
+                "error_id": error_response.request_id,
+                "metadata": {"fallback": True, "recovery_suggestions": error_response.recovery_suggestions}
             }]
-            state.market_validation["market_research_error"] = str(e)
-            state.market_validation["market_research_error_timestamp"] = datetime.now().isoformat()
+            
+            # Add structured error to state
+            state.market_validation.update({
+                "market_research_error": error_response.message,
+                "market_research_error_timestamp": error_response.timestamp.isoformat(),
+                "market_research_error_id": error_response.request_id,
+                "recovery_suggestions": error_response.recovery_suggestions
+            })
             state.update_timestamp()
             return state
     
@@ -317,7 +562,8 @@ class ProductDevelopmentOrchestrator:
         Returns:
             State with MVP planning completed
         """
-        logger.info("Executing MVP planning node")
+        logger.info("Executing MVP planning node", 
+                   extra={'session_id': state.session_id, 'node_name': 'mvp_planning'})
         
         try:
             # MVP features are already generated by BPA agent
@@ -325,23 +571,61 @@ class ProductDevelopmentOrchestrator:
             
             if not state.feature_specifications:
                 logger.warning("Feature specifications not found, re-running BPA agent")
-                state = await self.bpa_agent.analyze_business_viability(state)
+                try:
+                    state = await self.bpa_agent.analyze_business_viability(state)
+                except Exception as bpa_error:
+                    error_response = await self.error_handler.handle_workflow_error(
+                        bpa_error, state.session_id or "unknown", "mvp_planning_bpa_retry", state
+                    )
+                    logger.error(f"BPA agent retry failed in MVP planning [{error_response.request_id}]: {error_response.message}")
+                    
+                    # Use fallback MVP features
+                    fallback_data = self.error_handler.create_fallback_response("mvp_features", {})
+                    state.market_validation.update({
+                        "mvp_bpa_retry_error": error_response.message,
+                        "mvp_bpa_retry_error_id": error_response.request_id,
+                        "mvp_features_fallback": fallback_data
+                    })
             
             # Update phase
             state.current_phase = "mvp_design"
             state.update_timestamp()
             
-            # Save state
+            # Save state with error handling
             if state.session_id:
-                self.memory.save_session(state.session_id, state)
+                try:
+                    self.memory.save_session(state.session_id, state)
+                except Exception as save_error:
+                    error_response = await self.error_handler.handle_persistence_error(
+                        save_error, "save", state.session_id
+                    )
+                    logger.warning(f"State save failed in MVP planning [{error_response.request_id}]: {error_response.message}")
             
-            logger.info(f"MVP planning completed with {len(state.feature_specifications)} features")
+            logger.info(f"MVP planning completed with {len(state.feature_specifications)} features",
+                       extra={
+                           'session_id': state.session_id, 
+                           'node_name': 'mvp_planning',
+                           'feature_count': len(state.feature_specifications),
+                           'phase': state.current_phase
+                       })
             return state
             
         except Exception as e:
-            logger.error(f"MVP planning node failed: {e}")
-            state.market_validation["mvp_planning_error"] = str(e)
-            state.market_validation["mvp_planning_error_timestamp"] = datetime.now().isoformat()
+            # Handle error with structured error handling
+            error_response = await self.error_handler.handle_workflow_error(
+                e, state.session_id or "unknown", "mvp_planning", state
+            )
+            
+            logger.error(f"MVP planning node failed [{error_response.request_id}]: {error_response.message}")
+            self.error_handler.log_error_metrics(error_response)
+            
+            # Add structured error to state
+            state.market_validation.update({
+                "mvp_planning_error": error_response.message,
+                "mvp_planning_error_timestamp": error_response.timestamp.isoformat(),
+                "mvp_planning_error_id": error_response.request_id,
+                "recovery_suggestions": error_response.recovery_suggestions
+            })
             state.update_timestamp()
             return state
     
@@ -355,7 +639,8 @@ class ProductDevelopmentOrchestrator:
         Returns:
             State with technical architecture
         """
-        logger.info("Executing technical architecture node")
+        logger.info("Executing technical architecture node", 
+                   extra={'session_id': state.session_id, 'node_name': 'technical_architecture'})
         
         try:
             # Generate basic technical architecture based on features
@@ -364,23 +649,46 @@ class ProductDevelopmentOrchestrator:
             state.technical_architecture = tech_architecture
             state.update_timestamp()
             
-            # Save state
+            # Save state with error handling
             if state.session_id:
-                self.memory.save_session(state.session_id, state)
+                try:
+                    self.memory.save_session(state.session_id, state)
+                except Exception as save_error:
+                    error_response = await self.error_handler.handle_persistence_error(
+                        save_error, "save", state.session_id
+                    )
+                    logger.warning(f"State save failed in technical architecture [{error_response.request_id}]: {error_response.message}")
             
-            logger.info("Technical architecture completed")
+            logger.info("Technical architecture completed",
+                       extra={
+                           'session_id': state.session_id, 
+                           'node_name': 'technical_architecture',
+                           'architecture_type': tech_architecture.get('architecture_type', 'unknown')
+                       })
             return state
             
         except Exception as e:
-            logger.error(f"Technical architecture node failed: {e}")
-            state.market_validation["tech_architecture_error"] = str(e)
-            state.market_validation["tech_architecture_error_timestamp"] = datetime.now().isoformat()
+            # Handle error with structured error handling
+            error_response = await self.error_handler.handle_workflow_error(
+                e, state.session_id or "unknown", "technical_architecture", state
+            )
+            
+            logger.error(f"Technical architecture node failed [{error_response.request_id}]: {error_response.message}")
+            self.error_handler.log_error_metrics(error_response)
+            
+            # Add structured error to state
+            state.market_validation.update({
+                "tech_architecture_error": error_response.message,
+                "tech_architecture_error_timestamp": error_response.timestamp.isoformat(),
+                "tech_architecture_error_id": error_response.request_id,
+                "recovery_suggestions": error_response.recovery_suggestions
+            })
             state.update_timestamp()
             return state
     
     async def _gtm_strategy_node(self, state: ProductState) -> ProductState:
         """
-        GTM strategy node - develops go-to-market strategy.
+        GTM strategy node with enhanced error handling.
         
         Args:
             state: Current workflow state
@@ -390,29 +698,53 @@ class ProductDevelopmentOrchestrator:
             
         Requirements: 5.1, 5.2, 5.3, 5.4
         """
-        logger.info("Executing GTM strategy node")
+        logger.info("Executing GTM strategy node", 
+                   extra={'session_id': state.session_id, 'node_name': 'gtm_strategy'})
         
         try:
             # Use GTM agent to develop strategy
             updated_state = await self.gtm_agent.develop_gtm_strategy(state)
             
-            # Save state
+            # Save state with error handling
             if updated_state.session_id:
-                self.memory.save_session(updated_state.session_id, updated_state)
+                try:
+                    self.memory.save_session(updated_state.session_id, updated_state)
+                except Exception as save_error:
+                    error_response = await self.error_handler.handle_persistence_error(
+                        save_error, "save", updated_state.session_id
+                    )
+                    logger.warning(f"State save failed in GTM strategy [{error_response.request_id}]: {error_response.message}")
             
-            logger.info("GTM strategy completed")
+            logger.info("GTM strategy completed",
+                       extra={
+                           'session_id': updated_state.session_id, 
+                           'node_name': 'gtm_strategy',
+                           'has_gtm_strategy': updated_state.gtm_strategy is not None
+                       })
             return updated_state
             
         except Exception as e:
-            logger.error(f"GTM strategy node failed: {e}")
-            state.market_validation["gtm_strategy_error"] = str(e)
-            state.market_validation["gtm_strategy_error_timestamp"] = datetime.now().isoformat()
+            # Handle error with structured error handling
+            error_response = await self.error_handler.handle_workflow_error(
+                e, state.session_id or "unknown", "gtm_strategy", state
+            )
+            
+            logger.error(f"GTM strategy node failed [{error_response.request_id}]: {error_response.message}")
+            self.error_handler.log_error_metrics(error_response)
+            
+            # Add structured error to state
+            state.market_validation.update({
+                "gtm_strategy_error": error_response.message,
+                "gtm_strategy_error_timestamp": error_response.timestamp.isoformat(),
+                "gtm_strategy_error_id": error_response.request_id,
+                "recovery_suggestions": error_response.recovery_suggestions
+            })
             state.update_timestamp()
             return state
     
     async def _execution_roadmap_node(self, state: ProductState) -> ProductState:
         """
-        Execution roadmap node - creates 3-phase roadmap.
+        Execution roadmap node with enhanced error handling.
         
         Args:
             state: Current workflow state
@@ -422,7 +754,8 @@ class ProductDevelopmentOrchestrator:
             
         Requirements: 7.1, 7.2, 7.3, 7.4
         """
-        logger.info("Executing execution roadmap node")
+        logger.info("Executing execution roadmap node", 
+                   extra={'session_id': state.session_id, 'node_name': 'execution_roadmap'})
         
         try:
             # Use transition agent to generate roadmap
@@ -432,17 +765,44 @@ class ProductDevelopmentOrchestrator:
             updated_state.current_phase = "gtm_planning"
             updated_state.update_timestamp()
             
-            # Save final state
+            # Save final state with error handling
             if updated_state.session_id:
-                self.memory.save_session(updated_state.session_id, updated_state)
+                try:
+                    self.memory.save_session(updated_state.session_id, updated_state)
+                except Exception as save_error:
+                    error_response = await self.error_handler.handle_persistence_error(
+                        save_error, "save", updated_state.session_id
+                    )
+                    logger.warning(f"Final state save failed in execution roadmap [{error_response.request_id}]: {error_response.message}")
+                    # Add save error to state but continue
+                    updated_state.market_validation["final_save_error"] = error_response.message
+                    updated_state.market_validation["final_save_error_id"] = error_response.request_id
             
-            logger.info("Execution roadmap completed - workflow finished successfully")
+            logger.info("Execution roadmap completed - workflow finished successfully",
+                       extra={
+                           'session_id': updated_state.session_id, 
+                           'node_name': 'execution_roadmap',
+                           'final_phase': updated_state.current_phase,
+                           'roadmap_phases': len(updated_state.mvp_roadmap)
+                       })
             return updated_state
             
         except Exception as e:
-            logger.error(f"Execution roadmap node failed: {e}")
-            state.market_validation["execution_roadmap_error"] = str(e)
-            state.market_validation["execution_roadmap_error_timestamp"] = datetime.now().isoformat()
+            # Handle error with structured error handling
+            error_response = await self.error_handler.handle_workflow_error(
+                e, state.session_id or "unknown", "execution_roadmap", state
+            )
+            
+            logger.error(f"Execution roadmap node failed [{error_response.request_id}]: {error_response.message}")
+            self.error_handler.log_error_metrics(error_response)
+            
+            # Add structured error to state
+            state.market_validation.update({
+                "execution_roadmap_error": error_response.message,
+                "execution_roadmap_error_timestamp": error_response.timestamp.isoformat(),
+                "execution_roadmap_error_id": error_response.request_id,
+                "recovery_suggestions": error_response.recovery_suggestions
+            })
             state.update_timestamp()
             return state
     
@@ -458,7 +818,8 @@ class ProductDevelopmentOrchestrator:
             
         Requirements: 10.2 (conditional routing), 1.3 (validation gates)
         """
-        logger.info("Executing rejection report node")
+        logger.info("Executing rejection report node", 
+                   extra={'session_id': state.session_id, 'node_name': 'rejection_report'})
         
         try:
             # Generate rejection report based on validation results
@@ -473,17 +834,41 @@ class ProductDevelopmentOrchestrator:
             state.current_phase = "validation"
             state.update_timestamp()
             
-            # Save state
+            # Save state with error handling
             if state.session_id:
-                self.memory.save_session(state.session_id, state)
+                try:
+                    self.memory.save_session(state.session_id, state)
+                except Exception as save_error:
+                    error_response = await self.error_handler.handle_persistence_error(
+                        save_error, "save", state.session_id
+                    )
+                    logger.warning(f"State save failed in rejection report [{error_response.request_id}]: {error_response.message}")
             
-            logger.info("Rejection report completed")
+            logger.info("Rejection report completed",
+                       extra={
+                           'session_id': state.session_id, 
+                           'node_name': 'rejection_report',
+                           'workflow_status': 'rejected',
+                           'validation_score': state.market_validation.get("overall_score", "N/A")
+                       })
             return state
             
         except Exception as e:
-            logger.error(f"Rejection report node failed: {e}")
-            state.market_validation["rejection_report_error"] = str(e)
-            state.market_validation["rejection_report_error_timestamp"] = datetime.now().isoformat()
+            # Handle error with structured error handling
+            error_response = await self.error_handler.handle_workflow_error(
+                e, state.session_id or "unknown", "rejection_report", state
+            )
+            
+            logger.error(f"Rejection report node failed [{error_response.request_id}]: {error_response.message}")
+            self.error_handler.log_error_metrics(error_response)
+            
+            # Add structured error to state
+            state.market_validation.update({
+                "rejection_report_error": error_response.message,
+                "rejection_report_error_timestamp": error_response.timestamp.isoformat(),
+                "rejection_report_error_id": error_response.request_id,
+                "recovery_suggestions": error_response.recovery_suggestions
+            })
             state.update_timestamp()
             return state
     
